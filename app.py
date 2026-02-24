@@ -281,6 +281,7 @@ def init_db() -> None:
     for migration in [
         "ALTER TABLE spiele ADD COLUMN dfbnet_eingetragen INTEGER DEFAULT 0",
         "ALTER TABLE saisonplanung ADD COLUMN trainer_email TEXT",
+        "ALTER TABLE saisonplanung ADD COLUMN zeit_ende TEXT",
     ]:
         try:
             conn.execute(migration)
@@ -752,7 +753,71 @@ def save_saisonplanung(df: pd.DataFrame, saison: str) -> None:
     conn.close()
 
 
-def get_saisonplanung(saison: str) -> pd.DataFrame:
+def add_training_slot(
+    team: str,
+    tag: str,
+    zeit: str,
+    zeit_ende: str,
+    platz: str,
+    saison: str,
+    kabine: str = "",
+    trainer_email: str = "",
+) -> None:
+    """Fügt einen einzelnen Trainingsslot zur Saisonplanung hinzu."""
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO saisonplanung "
+        "(team, platz, tag, zeit, zeit_ende, kabine, trainer_email, saison) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (team, platz, tag, zeit, zeit_ende, kabine, trainer_email, saison),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_training_slot(slot_id: int) -> None:
+    """Löscht einen einzelnen Trainingsslot."""
+    conn = db_connect()
+    conn.execute("DELETE FROM saisonplanung WHERE id=?", (slot_id,))
+    conn.commit()
+    conn.close()
+
+
+def load_training_df_from_db(saison: str) -> pd.DataFrame:
+    """
+    Lädt die Saisonplanung aus der DB und gibt sie als DataFrame
+    mit den für die App erwarteten Spaltennamen zurück
+    (Team, Platz, Tag, Zeit, ZeitEnde).
+    """
+    sp = get_saisonplanung(saison)
+    if sp.empty:
+        return pd.DataFrame()
+    sp = sp.rename(columns={"team": "Team", "platz": "Platz", "tag": "Tag", "zeit": "Zeit"})
+    if "zeit_ende" in sp.columns:
+        sp = sp.rename(columns={"zeit_ende": "ZeitEnde"})
+    else:
+        sp["ZeitEnde"] = ""
+    return sp[["Team", "Platz", "Tag", "Zeit", "ZeitEnde"]]
+
+
+def update_kabinen_und_emails(
+    saison: str,
+    assignments: dict[str, str],
+    trainer_emails: dict[str, str],
+) -> None:
+    """Aktualisiert nur Kabine und Trainer-E-Mail je Team – löscht keine Slots."""
+    conn = db_connect()
+    for team, kabine in assignments.items():
+        conn.execute(
+            "UPDATE saisonplanung SET kabine=?, trainer_email=? "
+            "WHERE team=? AND saison=?",
+            (kabine, trainer_emails.get(team, ""), team, saison),
+        )
+    conn.commit()
+    conn.close()
+
+
+
     conn = db_connect()
     df = pd.read_sql(
         "SELECT * FROM saisonplanung WHERE saison=? ORDER BY tag,zeit",
@@ -954,11 +1019,19 @@ def page_trainingsplan_view() -> None:
         unsafe_allow_html=True,
     )
 
+    # Automatisch aus DB laden falls noch nichts im Session-State
     df_training = st.session_state.get("training_df", pd.DataFrame())
+    if df_training.empty:
+        saison_key  = f"{date.today().year}/{date.today().year + 1}"
+        df_training = load_training_df_from_db(
+            st.session_state.get("aktuell_saison", saison_key)
+        )
+        if not df_training.empty:
+            st.session_state.training_df = df_training
 
     if df_training.empty:
         if st.session_state.get("role") == "admin":
-            st.info("Kein Trainingsplan geladen. Bitte unter **Saisonplanung** importieren.")
+            st.info("Kein Trainingsplan geladen. Bitte unter **Saisonplanung** Trainingszeiten erfassen.")
         else:
             st.info("Kein Trainingsplan verfügbar. Bitte einen Administrator kontaktieren.")
         return
@@ -1000,9 +1073,13 @@ def page_trainingsplan_view() -> None:
                         unsafe_allow_html=True,
                     )
                 for _, row in slots.iterrows():
+                    zeit_end = row.get("ZeitEnde", "")
+                    zeit_label = (
+                        f"{row['Zeit']}–{zeit_end}" if zeit_end else row["Zeit"]
+                    )
                     st.markdown(
                         f'<div class="slot-card slot-training">'
-                        f"⚽ {row['Zeit']}<br><small>{row['Team']}</small></div>",
+                        f"⏱ {zeit_label}<br><small>{row['Team']}</small></div>",
                         unsafe_allow_html=True,
                     )
         st.divider()
@@ -1648,18 +1725,132 @@ def page_admin_spiel_anlegen() -> None:
 def page_saisonplanung() -> None:
     st.markdown(
         '<div class="main-header"><h1>📆 Saisonplanung</h1>'
-        '<p>Trainingsplan &amp; Kabinenzuweisung – starr für die gesamte Saison</p></div>',
+        '<p>Trainingszeiten erfassen · Kabinen zuweisen · Trainer hinterlegen</p></div>',
         unsafe_allow_html=True,
     )
 
     saison_default = f"{date.today().year}/{date.today().year + 1}"
     saison = st.text_input("Saison (z. B. 2025/2026)", value=saison_default)
+    st.session_state["aktuell_saison"] = saison
 
-    tab1, tab2 = st.tabs(["📂 Trainingsplan importieren", "🚿 Kabinenzuweisung"])
+    # Immer aktuellen Stand aus DB in session_state laden
+    db_df = load_training_df_from_db(saison)
+    if not db_df.empty:
+        st.session_state.training_df = db_df
 
-    # ── Tab 1: Import ──────────────────────────────────────────────────────
-    with tab1:
-        st.subheader("Trainingsplan laden")
+    day_order = {d: i for i, d in enumerate(DAYS)}
+
+    tab_manuell, tab_csv, tab_kabinen = st.tabs([
+        "✏️ Trainingszeiten erfassen",
+        "📂 CSV / Excel importieren",
+        "🚿 Kabinen & Trainer",
+    ])
+
+    # ── Tab 1: Manuell ────────────────────────────────────────────────────
+    with tab_manuell:
+        # ── Eingabeformular ────────────────────────────────────────────
+        sp_df = get_saisonplanung(saison)
+        vorhandene_teams = sorted(sp_df["team"].unique().tolist()) if not sp_df.empty else []
+
+        with st.form("training_slot_form", clear_on_submit=True):
+            st.subheader("Neuen Trainingstermin hinzufügen")
+            mc1, mc2 = st.columns([2, 1])
+            with mc1:
+                f_team = st.text_input(
+                    "Mannschaft",
+                    placeholder="z. B. A-Jugend, 1. Mannschaft …",
+                )
+                if vorhandene_teams:
+                    st.caption(
+                        "Vorhandene Teams: " + " · ".join(vorhandene_teams[:10])
+                        + (" …" if len(vorhandene_teams) > 10 else "")
+                    )
+            with mc2:
+                f_platz = st.selectbox("Platz", PITCHES)
+
+            f_tage = st.multiselect(
+                "Trainingstage",
+                DAYS,
+                placeholder="Einen oder mehrere Tage wählen …",
+            )
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                f_zeit_von = st.selectbox("Trainingsstart (Von)", TIME_SLOTS_TRAINING)
+            with tc2:
+                idx_von     = TIME_SLOTS_TRAINING.index(f_zeit_von)
+                opts_bis    = TIME_SLOTS_TRAINING[idx_von + 1:]
+                f_zeit_bis  = st.selectbox(
+                    "Trainingsende (Bis)",
+                    opts_bis if opts_bis else TIME_SLOTS_TRAINING,
+                )
+
+            submitted = st.form_submit_button(
+                "➕ Hinzufügen", type="primary", use_container_width=True
+            )
+            if submitted:
+                if not f_team.strip():
+                    st.error("Bitte Mannschaftsname eingeben.")
+                elif not f_tage:
+                    st.error("Bitte mindestens einen Trainingstag wählen.")
+                else:
+                    for tag in f_tage:
+                        add_training_slot(
+                            f_team.strip(), tag, f_zeit_von, f_zeit_bis,
+                            f_platz, saison,
+                        )
+                    st.success(
+                        f"✅ {len(f_tage)} Trainingsslot(s) für "
+                        f"**{f_team.strip()}** gespeichert "
+                        f"({f_zeit_von}–{f_zeit_bis}, {f_platz})."
+                    )
+                    st.session_state.training_df = load_training_df_from_db(saison)
+                    st.rerun()
+
+        # ── Bestehende Trainingszeiten ──────────────────────────────────
+        st.divider()
+        sp_df = get_saisonplanung(saison)  # nach möglichem rerun neu laden
+        if sp_df.empty:
+            st.info("Noch keine Trainingszeiten für diese Saison erfasst.")
+        else:
+            teams_sorted = sorted(sp_df["team"].unique(), key=str.lower)
+            st.markdown(f"**{len(teams_sorted)} Mannschaft(en)** · {len(sp_df)} Slot(s) gesamt")
+            st.divider()
+
+            for team in teams_sorted:
+                team_df = (
+                    sp_df[sp_df["team"] == team]
+                    .copy()
+                    .sort_values("tag", key=lambda s: s.map(day_order))
+                )
+                with st.expander(f"⚽ {team}  ({len(team_df)} Slot(s))", expanded=False):
+                    for _, row in team_df.iterrows():
+                        ze = row.get("zeit_ende", "") or ""
+                        zeit_label = f"{row['zeit']}–{ze}" if ze else row["zeit"]
+                        r1, r2 = st.columns([5, 1])
+                        with r1:
+                            st.markdown(
+                                f"📅 **{row['tag']}** &nbsp;·&nbsp; "
+                                f"⏱ {zeit_label} &nbsp;·&nbsp; "
+                                f"🏟️ {row['platz']}"
+                                + (f" &nbsp;·&nbsp; 🚿 {row['kabine']}" if row.get("kabine") else ""),
+                                unsafe_allow_html=True,
+                            )
+                        with r2:
+                            if st.button(
+                                "🗑️", key=f"del_{row['id']}",
+                                help="Diesen Slot löschen",
+                            ):
+                                delete_training_slot(int(row["id"]))
+                                st.session_state.training_df = load_training_df_from_db(saison)
+                                st.rerun()
+
+    # ── Tab 2: CSV-Import ─────────────────────────────────────────────────
+    with tab_csv:
+        st.subheader("Trainingsplan importieren")
+        st.caption(
+            "Importiert einen kompletten Trainingsplan aus CSV oder Excel "
+            "und **ersetzt** alle bestehenden Einträge der gewählten Saison."
+        )
         col_up, col_btn = st.columns([2, 1])
         with col_up:
             uploaded = st.file_uploader(
@@ -1690,64 +1881,60 @@ def page_saisonplanung() -> None:
             st.subheader("Vorschau")
             st.dataframe(df_training, use_container_width=True, hide_index=True)
 
-            if st.button("💾 In Saisondatenbank speichern", type="primary"):
+            if st.button("💾 In Saisondatenbank speichern (⚠️ überschreibt alles)", type="primary"):
                 sv = df_training.copy()
                 if "kabine" not in sv.columns:
                     sv["kabine"] = ""
                 sv.columns = [c.lower() for c in sv.columns]
-                for col in ["team","platz","tag","zeit","kabine"]:
+                for col in ["team", "platz", "tag", "zeit", "kabine"]:
                     if col not in sv.columns:
                         sv[col] = ""
-                save_saisonplanung(sv[["team","platz","tag","zeit","kabine"]], saison)
+                save_saisonplanung(sv[["team", "platz", "tag", "zeit", "kabine"]], saison)
+                st.session_state.training_df = load_training_df_from_db(saison)
                 st.success(f"✅ Trainingsplan für Saison {saison} gespeichert.")
 
-    # ── Tab 2: Kabinenzuweisung ───────────────────────────────────────────
-    with tab2:
-        st.subheader("Kabinen pro Team zuweisen")
+    # ── Tab 3: Kabinen & Trainer ──────────────────────────────────────────
+    with tab_kabinen:
+        st.subheader("Kabinen & Trainer-E-Mails je Mannschaft")
         st.caption(
-            "Die Kabinenzuweisung gilt für die gesamte Saison. "
-            "Nutze die Vergabe, um Doppelbelegungen bereits hier zu erkennen."
+            "Die Zuweisung gilt saisonweit. Kabinen werden bei Spielansetzungen "
+            "automatisch als belegt markiert."
         )
 
-        sp_df       = get_saisonplanung(saison)
-        df_training = st.session_state.get("training_df", pd.DataFrame())
-        source_df   = sp_df if not sp_df.empty else df_training
+        sp_df = get_saisonplanung(saison)
 
-        if source_df.empty:
-            st.info("Bitte zuerst einen Trainingsplan importieren.")
+        if sp_df.empty:
+            st.info("Bitte zuerst Trainingszeiten erfassen (Tab ✏️).")
         else:
-            team_col = "Team" if "Team" in source_df.columns else "team"
-            teams    = sorted(source_df[team_col].unique())
-
-            st.markdown(f"**{len(teams)} Teams** – Kabine je Team festlegen:")
+            teams = sorted(sp_df["team"].unique())
+            st.markdown(f"**{len(teams)} Mannschaft(en)**")
 
             assignments: dict[str, str] = {}
             trainer_emails: dict[str, str] = {}
             cols_per_row = 3
             for i in range(0, len(teams), cols_per_row):
-                batch    = teams[i : i + cols_per_row]
+                batch    = teams[i: i + cols_per_row]
                 row_cols = st.columns(cols_per_row)
                 for col, team in zip(row_cols, batch):
                     with col:
-                        # Kabine
+                        st.markdown(f"**{team}**")
                         current = ""
-                        if not sp_df.empty and "kabine" in sp_df.columns:
-                            hit = sp_df[sp_df[team_col] == team]["kabine"]
-                            if not hit.empty and str(hit.iloc[0]) not in ("", "nan"):
-                                current = str(hit.iloc[0])
+                        hit = sp_df[sp_df["team"] == team]["kabine"]
+                        if not hit.empty and str(hit.iloc[0]) not in ("", "nan"):
+                            current = str(hit.iloc[0])
                         idx    = LOCKER_ROOMS.index(current) if current in LOCKER_ROOMS else 0
                         chosen = st.selectbox(
-                            team,
+                            "Kabine",
                             ["(keine)"] + LOCKER_ROOMS,
                             index=idx + 1 if current else 0,
                             key=f"kabine_{team}",
+                            label_visibility="collapsed",
                         )
                         assignments[team] = chosen if chosen != "(keine)" else ""
-                        # Trainer-E-Mail
                         cur_mail = ""
-                        if not sp_df.empty and "trainer_email" in sp_df.columns:
-                            mhit = sp_df[sp_df[team_col] == team]["trainer_email"]
-                            if not mhit.empty and str(mhit.iloc[0]) not in ("", "nan", "None"):
+                        mhit = sp_df[sp_df["team"] == team]["trainer_email"]
+                        if "trainer_email" in sp_df.columns and not mhit.empty:
+                            if str(mhit.iloc[0]) not in ("", "nan", "None"):
                                 cur_mail = str(mhit.iloc[0])
                         trainer_emails[team] = st.text_input(
                             "📧 Trainer-E-Mail",
@@ -1757,117 +1944,83 @@ def page_saisonplanung() -> None:
                             label_visibility="collapsed",
                         )
 
-            # ── Duplikat-Check ──────────────────────────────────────────────
+            # ── Duplikat-Check ──────────────────────────────────────────
             st.divider()
             st.subheader("🔍 Duplikat-Prüfung")
-
             kabinen_belegt: dict[str, list[str]] = {}
             for team, kabine in assignments.items():
                 if kabine:
                     kabinen_belegt.setdefault(kabine, []).append(team)
-
             duplikate = {k: v for k, v in kabinen_belegt.items() if len(v) > 1}
 
             if duplikate:
-                st.error(
-                    f"⛔ **{len(duplikate)} Kabine(n) mehrfach vergeben!** "
-                    "Bitte vor dem Speichern korrigieren."
-                )
-                for kabine, teams_list in duplikate.items():
-                    grad = "dreifach" if len(teams_list) >= 3 else "doppelt"
+                st.error(f"⛔ **{len(duplikate)} Kabine(n) mehrfach vergeben!**")
+                for kabine, tms in duplikate.items():
+                    grad = "dreifach" if len(tms) >= 3 else "doppelt"
                     st.markdown(
                         f'<div class="duplicate-warning">'
                         f'<b style="color:#ff4d4d;">🔴 {kabine}</b> – '
-                        f'{grad} vergeben an: '
-                        f'<b style="color:#fff;">{", ".join(teams_list)}</b>'
+                        f'{grad} vergeben an: <b style="color:#fff;">{", ".join(tms)}</b>'
                         "</div>",
                         unsafe_allow_html=True,
                     )
             else:
-                st.success(
-                    "✅ Keine Kabinen-Konflikte – alle Zuweisungen sind eindeutig."
-                )
+                st.success("✅ Keine Kabinen-Konflikte.")
 
-            # ── Übersichts-Grid ──────────────────────────────────────────────
+            # ── Übersichts-Grid ─────────────────────────────────────────
             st.subheader("Kabinen-Übersicht")
-            ov_cols = st.columns(4)
+            ov_cols = st.columns(max(len(LOCKER_ROOMS), 1))
             for idx_k, kabine in enumerate(LOCKER_ROOMS):
-                with ov_cols[idx_k % 4]:
-                    teams_in   = [t for t, k in assignments.items() if k == kabine]
+                with ov_cols[idx_k % len(LOCKER_ROOMS)]:
+                    teams_in    = [t for t, k in assignments.items() if k == kabine]
                     is_conflict = kabine in duplikate
-                    css = (
-                        "locker-conflict" if is_conflict
-                        else ("locker-busy" if teams_in else "locker-free")
-                    )
+                    css  = ("locker-conflict" if is_conflict
+                            else ("locker-busy" if teams_in else "locker-free"))
                     ikon = "🔴" if is_conflict else ("🚿" if teams_in else "🔓")
                     teams_html = (
                         "".join(
-                            f'<div style="font-size:11px;color:#ffd6dc;margin-top:3px;">'
-                            f"{t}</div>"
+                            f'<div style="font-size:11px;color:#ffd6dc;margin-top:3px;">{t}</div>'
                             for t in teams_in
                         )
                         if teams_in
                         else '<div style="color:#4a1020;font-size:11px;">Frei</div>'
                     )
                     st.markdown(
-                        f'<div class="{css}">'
-                        f'<div style="font-size:24px;">{ikon}</div>'
+                        f'<div class="{css}"><div style="font-size:24px;">{ikon}</div>'
                         f'<div style="color:#fff;font-weight:bold;font-size:13px;margin:6px 0;">'
-                        f"{kabine}</div>"
-                        f"{teams_html}</div>",
+                        f"{kabine}</div>{teams_html}</div>",
                         unsafe_allow_html=True,
                     )
 
-            # ── Zeitbasierter Konflikt-Check ─────────────────────────────────
-            if not sp_df.empty:
-                st.divider()
-                st.subheader("🕐 Zeitbasierter Konflikt-Check")
-                st.caption(
-                    "Prüft, ob dieselbe Kabine am gleichen Tag zur gleichen Zeit "
-                    "bei zwei verschiedenen Teams belegt ist."
+            # ── Zeitbasierter Konflikt-Check ────────────────────────────
+            st.divider()
+            st.subheader("🕐 Zeitbasierter Konflikt-Check")
+            konflikt_df = get_kabinen_konflikte(saison)
+            if konflikt_df.empty:
+                st.success("✅ Keine zeitgleichen Kabinen-Kollisionen.")
+            else:
+                st.error(f"⛔ {len(konflikt_df)} zeitgleiche Kabinen-Kollision(en)!")
+                st.dataframe(
+                    konflikt_df.rename(columns={
+                        "kabine": "Kabine", "tag": "Tag", "zeit": "Zeit",
+                        "anzahl": "Anzahl Teams", "teams": "Betroffene Teams",
+                    }),
+                    use_container_width=True, hide_index=True,
                 )
-                konflikt_df = get_kabinen_konflikte(saison)
-                if konflikt_df.empty:
-                    st.success("✅ Keine zeitgleichen Kabinen-Kollisionen.")
-                else:
-                    st.error(
-                        f"⛔ {len(konflikt_df)} zeitgleiche Kabinen-Kollision(en) gefunden!"
-                    )
-                    st.dataframe(
-                        konflikt_df.rename(columns={
-                            "kabine": "Kabine",
-                            "tag":    "Tag",
-                            "zeit":   "Zeit",
-                            "anzahl": "Anzahl Teams",
-                            "teams":  "Betroffene Teams",
-                        }),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
 
             st.divider()
-            if not duplikate:
-                if st.button(
-                    "💾 Kabinen-Zuweisung speichern",
-                    type="primary", use_container_width=True,
-                ):
-                    sv2 = source_df.copy()
-                    sv2.columns = [c.lower() for c in sv2.columns]
-                    sv2["kabine"]       = sv2["team"].map(assignments).fillna("")
-                    sv2["trainer_email"] = sv2["team"].map(trainer_emails).fillna("")
-                    for col in ["team", "platz", "tag", "zeit", "kabine", "trainer_email"]:
-                        if col not in sv2.columns:
-                            sv2[col] = ""
-                    save_saisonplanung(
-                        sv2[["team", "platz", "tag", "zeit", "kabine", "trainer_email"]], saison
-                    )
-                    st.success(f"✅ Kabinenzuweisung für Saison {saison} gespeichert!")
-                    st.rerun()
-            else:
-                st.button(
-                    "💾 Speichern (zuerst Konflikte lösen)",
-                    disabled=True, use_container_width=True,
-                )
+            btn_disabled = bool(duplikate)
+            if st.button(
+                "💾 Kabinen & E-Mails speichern" if not btn_disabled
+                else "💾 Speichern (zuerst Konflikte lösen)",
+                type="primary" if not btn_disabled else "secondary",
+                disabled=btn_disabled,
+                use_container_width=True,
+            ):
+                update_kabinen_und_emails(saison, assignments, trainer_emails)
+                st.success(f"✅ Kabinen & Trainer-Mails für Saison {saison} gespeichert!")
+                st.session_state.training_df = load_training_df_from_db(saison)
+                st.rerun()
 
 
 def page_platzverwaltung() -> None:
