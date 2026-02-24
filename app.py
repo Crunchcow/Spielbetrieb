@@ -282,6 +282,13 @@ def init_db() -> None:
         "ALTER TABLE spiele ADD COLUMN dfbnet_eingetragen INTEGER DEFAULT 0",
         "ALTER TABLE saisonplanung ADD COLUMN trainer_email TEXT",
         "ALTER TABLE saisonplanung ADD COLUMN zeit_ende TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN anfrage_typ TEXT DEFAULT 'neu'",
+        "ALTER TABLE spielanfragen ADD COLUMN spiel_id INTEGER",
+        "ALTER TABLE spielanfragen ADD COLUMN neue_uhrzeit TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN neues_datum TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN neuer_platz TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN neue_kabine TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN erstellt_von TEXT",
     ]:
         try:
             conn.execute(migration)
@@ -510,6 +517,131 @@ def _mail_trainer_html(
     """
 
 
+def _mail_trainer_aenderung_html(
+    datum_alt: date,
+    uhrzeit_alt: str,
+    platz_alt: str,
+    kabine_alt: str,
+    datum_neu: date,
+    uhrzeit_neu: str,
+    platz_neu: str,
+    kabine_neu: str,
+    heimteam: str,
+    gastteam: str,
+) -> str:
+    """E-Mail an Trainer: Spielankündigung wurde geändert – zeigt Alt vs. Neu."""
+    def row(label: str, alt: str, neu: str) -> str:
+        changed = alt != neu
+        farbe   = "#f0a500" if changed else "#333"
+        return (
+            f"<tr><td style='padding:8px;color:#888;width:130px;'>{label}</td>"
+            f"<td style='padding:8px;text-decoration:line-through;color:#999;'>{alt}</td>"
+            f"<td style='padding:8px;font-weight:bold;color:{farbe};'>{neu}</td></tr>"
+        )
+    return f"""
+    <!DOCTYPE html><html>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:20px;">
+      <div style="max-width:620px;margin:0 auto;background:#fff;border-radius:12px;
+                  overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15);">
+        <div style="background:#f0a500;padding:24px 28px;">
+          <h1 style="margin:0;color:#fff;font-size:22px;">✏️ Spieländerung</h1>
+          <p style="margin:4px 0 0;color:#fff3d0;font-size:14px;">
+            Ein Spieltermin wurde angepasst
+          </p>
+        </div>
+        <div style="padding:24px 28px;">
+          <p style="color:#333;">
+            <b>⚽ {heimteam} vs {gastteam}</b><br>
+            Der folgende Termin wurde im DFBnet geändert:
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr style="background:#eee;">
+              <th style="padding:8px;text-align:left;color:#555;">Feld</th>
+              <th style="padding:8px;text-align:left;color:#555;">Alt</th>
+              <th style="padding:8px;text-align:left;color:#f0a500;">Neu ✓</th>
+            </tr>
+            {row("Datum", datum_alt.strftime("%d.%m.%Y"), datum_neu.strftime("%d.%m.%Y"))}
+            {row("Uhrzeit", uhrzeit_alt, uhrzeit_neu)}
+            {row("Platz", platz_alt, platz_neu)}
+            {row("Kabine", kabine_alt or "–", kabine_neu or "–")}
+          </table>
+          <div style="background:#fff8e1;border-left:4px solid #f0a500;
+                      padding:14px 16px;border-radius:6px;margin:16px 0;">
+            <b style="color:#f0a500;">ℹ️ Bitte Termin im Kalender aktualisieren</b><br>
+            <span style="color:#555;font-size:13px;">
+              Die Änderung ist bereits auf
+              <a href="https://www.fussball.de" style="color:#C8102E;">fussball.de</a>
+              sichtbar.
+            </span>
+          </div>
+        </div>
+        <div style="background:#f0f0f0;padding:14px 28px;font-size:12px;
+                    color:#888;text-align:center;">
+          Automatische Benachrichtigung · FCTM Spielbetrieb-Manager
+        </div>
+      </div>
+    </body></html>
+    """
+
+
+def _mail_trainer_stornierung_html(
+    datum: date,
+    uhrzeit: str,
+    platz: str,
+    heimteam: str,
+    gastteam: str,
+    grund: str,
+) -> str:
+    """E-Mail an Trainer: Spiel wurde storniert."""
+    return f"""
+    <!DOCTYPE html><html>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:20px;">
+      <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;
+                  overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15);">
+        <div style="background:#ef4444;padding:24px 28px;">
+          <h1 style="margin:0;color:#fff;font-size:22px;">❌ Spielabsage</h1>
+          <p style="margin:4px 0 0;color:#ffd6d6;font-size:14px;">
+            Ein Pflichtspiel wurde abgesagt
+          </p>
+        </div>
+        <div style="padding:24px 28px;">
+          <p style="color:#333;">
+            Das folgende Spiel wurde abgesagt und im DFBnet storniert:
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr style="background:#fafafa;">
+              <td style="padding:8px;color:#888;width:140px;">Datum</td>
+              <td style="padding:8px;font-weight:bold;">{datum.strftime('%A, %d.%m.%Y')}</td></tr>
+            <tr>
+              <td style="padding:8px;color:#888;">Uhrzeit</td>
+              <td style="padding:8px;font-weight:bold;">{uhrzeit} Uhr</td></tr>
+            <tr style="background:#fafafa;">
+              <td style="padding:8px;color:#888;">Platz</td>
+              <td style="padding:8px;">{platz}</td></tr>
+            <tr>
+              <td style="padding:8px;color:#888;">Begegnung</td>
+              <td style="padding:8px;font-weight:bold;">{heimteam} vs {gastteam}</td></tr>
+          </table>
+          {f'<p style="color:#666;font-size:13px;"><b>Grund:</b> {grund}</p>' if grund else ''}
+          <div style="background:#fee2e2;border-left:4px solid #ef4444;
+                      padding:14px 16px;border-radius:6px;margin:16px 0;">
+            <b style="color:#ef4444;">📋 Das Training kann wie gewohnt stattfinden.</b><br>
+            <span style="color:#555;font-size:13px;">
+              Der Platz ist wieder frei. Die Änderung ist auf
+              <a href="https://www.fussball.de" style="color:#C8102E;">fussball.de</a>
+              sichtbar.
+            </span>
+          </div>
+        </div>
+        <div style="background:#f0f0f0;padding:14px 28px;font-size:12px;
+                    color:#888;text-align:center;">
+          Automatische Benachrichtigung · FCTM Spielbetrieb-Manager
+        </div>
+      </div>
+    </body></html>
+    """
+
+
 def _mail_anfrage_html(
     anfrage_id: int,
     datum: date,
@@ -608,18 +740,101 @@ def _mail_anfrage_html(
 
 # ── Spielanfragen ─────────────────────────────────────────────────────────────
 
-def create_spielanfrage(datum, uhrzeit, platz, heimteam, gastteam, kabine, notizen) -> int:
+def create_spielanfrage(datum, uhrzeit, platz, heimteam, gastteam, kabine="", notizen="", erstellt_von="") -> int:
     conn = db_connect()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO spielanfragen (datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (datum.isoformat(), uhrzeit, platz, heimteam, gastteam, kabine, notizen),
+        "INSERT INTO spielanfragen (datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (datum.isoformat(), uhrzeit, platz, heimteam, gastteam, kabine, notizen, erstellt_von),
     )
     rid = c.lastrowid
     conn.commit()
     conn.close()
     return rid
+
+
+def create_anfrage_aenderung(
+    spiel_id: int,
+    neues_datum: date,
+    neue_uhrzeit: str,
+    neuer_platz: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Nutzer beantragt eine Änderung eines bestehenden Spiels. Kabine wird vom Admin vergeben."""
+    conn = db_connect()
+    row = conn.execute("SELECT * FROM spiele WHERE id=?", (spiel_id,)).fetchone()
+    conn.close()
+    if not row:
+        return -1
+    sp_cols = ["id","datum","uhrzeit","platz","heimteam","gastteam","kabine","notizen"]
+    sp = dict(zip(sp_cols, row[:len(sp_cols)]))
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,"
+        "anfrage_typ,spiel_id,neues_datum,neue_uhrzeit,neuer_platz,neue_kabine,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            sp["datum"], sp["uhrzeit"], sp["platz"],
+            sp["heimteam"], sp["gastteam"], sp["kabine"], notizen,
+            "aenderung", spiel_id,
+            neues_datum.isoformat(), neue_uhrzeit, neuer_platz,
+            sp["kabine"],  # neue_kabine: vorerst alte Kabine, Admin ändert beim Genehmigen
+            erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_stornierung(spiel_id: int, notizen: str, erstellt_von: str = "") -> int:
+    """Nutzer beantragt die Stornierung eines bestehenden Spiels."""
+    conn = db_connect()
+    row = conn.execute("SELECT * FROM spiele WHERE id=?", (spiel_id,)).fetchone()
+    conn.close()
+    if not row:
+        return -1
+    sp_cols = ["id","datum","uhrzeit","platz","heimteam","gastteam","kabine","notizen"]
+    sp = dict(zip(sp_cols, row[:len(sp_cols)]))
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,anfrage_typ,spiel_id,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            sp["datum"], sp["uhrzeit"], sp["platz"],
+            sp["heimteam"], sp["gastteam"], sp["kabine"], notizen,
+            "stornierung", spiel_id, erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def update_match_details(
+    mid: int,
+    neues_datum: date,
+    neue_uhrzeit: str,
+    neuer_platz: str,
+    neue_kabine: str,
+    notizen: str,
+) -> None:
+    """Aktualisiert ein Spiel direkt (Admin-Aktion)."""
+    conn = db_connect()
+    conn.execute(
+        "UPDATE spiele SET datum=?,uhrzeit=?,platz=?,kabine=?,notizen=? WHERE id=?",
+        (neues_datum.isoformat(), neue_uhrzeit, neuer_platz, neue_kabine, notizen, mid),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_all_anfragen() -> pd.DataFrame:
@@ -658,26 +873,52 @@ def approve_anfrage(aid: int, betroffene: list[str]) -> None:
 def confirm_dfbnet(aid: int) -> int:
     """
     Schritt 2: DFBnet-Eintragung bestätigt.
-    Jetzt wird das Spiel ins Dashboard übernommen, Status → abgeschlossen.
-    Gibt die neue Spiel-ID zurück.
+    - 'neu':          Spiel wird neu ins Dashboard übernommen.
+    - 'aenderung':    Bestehendes Spiel wird aktualisiert.
+    - 'stornierung':  Bestehendes Spiel wird gelöscht.
+    Gibt die Spiel-ID zurück (-1 bei Fehler, 0 bei Stornierung).
     """
     conn = db_connect()
     row = conn.execute("SELECT * FROM spielanfragen WHERE id=?", (aid,)).fetchone()
     conn.close()
     if not row:
         return -1
-    cols = [
-        "id","datum","uhrzeit","platz","heimteam","gastteam",
-        "kabine","notizen","status","bearbeiter","erstellt_am","bearbeitet_am",
-    ]
-    r = dict(zip(cols, row))
-    # betroffene Teams aus training_ausfaelle holen falls schon gespeichert (leer OK)
+    # Spaltennamen dynamisch aus Cursor holen
+    conn = db_connect()
+    cur = conn.execute("SELECT * FROM spielanfragen WHERE id=?", (aid,))
+    col_names = [d[0] for d in cur.description]
+    r = dict(zip(col_names, cur.fetchone()))
+    conn.close()
+
+    typ = r.get("anfrage_typ") or "neu"
+
+    if typ == "stornierung":
+        if r.get("spiel_id"):
+            delete_match(int(r["spiel_id"]))
+        update_anfrage_status(aid, "abgeschlossen", "Admin")
+        return 0
+
+    if typ == "aenderung" and r.get("spiel_id"):
+        update_match_details(
+            int(r["spiel_id"]),
+            date.fromisoformat(r["neues_datum"]),
+            r["neue_uhrzeit"], r["neuer_platz"],
+            r.get("neue_kabine") or r.get("kabine") or "",
+            r.get("notizen") or "",
+        )
+        conn2 = db_connect()
+        conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (r["spiel_id"],))
+        conn2.commit()
+        conn2.close()
+        update_anfrage_status(aid, "abgeschlossen", "Admin")
+        return int(r["spiel_id"])
+
+    # typ == 'neu' (Standard)
     sid = save_match(
         date.fromisoformat(r["datum"]), r["uhrzeit"], r["platz"],
         r["heimteam"] or "", r["gastteam"] or "",
         r["kabine"] or "", r["notizen"] or "", [],
     )
-    # dfbnet_eingetragen Flag setzen
     conn2 = db_connect()
     conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (sid,))
     conn2.commit()
@@ -817,7 +1058,7 @@ def update_kabinen_und_emails(
     conn.close()
 
 
-
+def get_saisonplanung(saison: str) -> pd.DataFrame:
     conn = db_connect()
     df = pd.read_sql(
         "SELECT * FROM saisonplanung WHERE saison=? ORDER BY tag,zeit",
@@ -1007,6 +1248,19 @@ def status_badge(status: str) -> str:
     )
 
 
+def typ_badge(typ: str) -> str:
+    meta = {
+        "neu":         ("#3b82f6", "🆕", "Neue Ansetzung"),
+        "aenderung":   ("#f0a500", "✏️", "Änderung"),
+        "stornierung": ("#ef4444", "❌", "Stornierung"),
+    }
+    farbe, icon, label = meta.get(typ, ("#888", "?", typ))
+    return (
+        f'<span style="background:{farbe};color:#fff;padding:2px 10px;'
+        f'border-radius:12px;font-size:11px;font-weight:bold;">{icon} {label}</span>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Seiten – Gemeinsam
 # ---------------------------------------------------------------------------
@@ -1090,109 +1344,210 @@ def page_trainingsplan_view() -> None:
 # ---------------------------------------------------------------------------
 
 def page_user_anfrage() -> None:
+    my_team = st.session_state.get("team", "")
     st.markdown(
-        '<div class="main-header"><h1>📨 Spielanfrage stellen</h1>'
-        '<p>Anfrage für ein neues Spiel einreichen – der Admin prüft und genehmigt</p></div>',
+        '<div class="main-header"><h1>📨 Spielanfragen stellen</h1>'
+        f'<p>Mannschaft: <strong>{my_team}</strong> · '
+        'Neue Ansetzung anfragen · Änderung beantragen · Stornierung beantragen</p></div>',
         unsafe_allow_html=True,
     )
 
     df_training = st.session_state.get("training_df", pd.DataFrame())
-    col_form, col_list = st.columns([3, 2])
+    alle_spiele = get_all_matches()
 
-    with col_form:
+    tab_neu, tab_aend, tab_storni, tab_meine = st.tabs([
+        "🆕 Neues Spiel",
+        "✏️ Änderung beantragen",
+        "❌ Stornierung beantragen",
+        "📋 Meine Anfragen",
+    ])
+
+    # ── Tab: Neues Spiel ─────────────────────────────────────────────────────
+    with tab_neu:
         with st.form("anfrage_form"):
-            st.subheader("Anfrage Details")
+            st.subheader("Neue Spielanfrage")
             fc1, fc2 = st.columns(2)
             with fc1:
                 f_datum   = st.date_input("Datum", value=date.today())
             with fc2:
                 f_uhrzeit = st.selectbox("Anstoßzeit", TIME_SLOTS_TRAINING)
-
             f_platz = st.selectbox("Platz", PITCHES_SPIEL)
             fc3, fc4 = st.columns(2)
             with fc3:
-                f_heim = st.text_input("Heimteam", placeholder="z. B. 1. Mannschaft")
+                # Heimteam ist gesperrt – aus dem Login vorbelegt
+                f_heim = st.text_input(
+                    "Heimteam", value=my_team, disabled=bool(my_team),
+                    help="Wird automatisch aus deiner Mannschaft übernommen.",
+                )
             with fc4:
-                f_gast = st.text_input("Gastteam",  placeholder="z. B. FC Muster")
-
-            freie_kabinen = get_free_kabinen(f_datum, f_uhrzeit)
-            belegt_count  = len(LOCKER_ROOMS) - len(freie_kabinen)
-            if belegt_count:
-                st.info(
-                    f"🚳 {belegt_count} Kabine(n) durch Training belegt – "
-                    f"nur freie Kabinen zur Auswahl."
-                )
-            kc1, kc2 = st.columns(2)
-            with kc1:
-                f_kabine_heim = st.selectbox(
-                    "🏠 Kabine Heimmannschaft", freie_kabinen, key="kh"
-                )
-            with kc2:
-                rest_gast = [k for k in freie_kabinen if k != f_kabine_heim]
-                f_kabine_gast = st.selectbox(
-                    "✈️ Kabine Gastmannschaft",
-                    rest_gast if rest_gast else freie_kabinen,
-                    key="kg",
-                )
+                f_gast = st.text_input("Gastteam", placeholder="z. B. FC Muster")
+            st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
             f_notizen = st.text_area("Notizen / Anmerkungen")
-
             conflicts = find_conflicts(df_training, f_datum, f_uhrzeit, f_platz)
             if conflicts:
                 st.warning(
-                    f"⚠️ Hinweis: **{', '.join(conflicts)}** trainieren zu diesem Zeitpunkt "
-                    "auf diesem Platz. Der Admin prüft die Zustimmung der Trainer."
+                    f"⚠️ **{', '.join(conflicts)}** trainieren zu diesem Zeitpunkt. "
+                    "Der Admin prüft die Zustimmung."
                 )
-
             if st.form_submit_button("📨 Anfrage absenden", type="primary", use_container_width=True):
-                if not f_heim.strip() or not f_gast.strip():
+                heim_val = my_team or f_heim.strip()
+                if not heim_val or not f_gast.strip():
                     st.error("Bitte Heim- und Gastteam eintragen.")
-                elif f_kabine_heim == f_kabine_gast:
-                    st.error("Heim- und Gastmannschaft können nicht dieselbe Kabine nutzen.")
                 else:
-                    f_kabine = f"{f_kabine_heim} / {f_kabine_gast}"
                     rid = create_spielanfrage(
-                        f_datum, f_uhrzeit, f_platz, f_heim, f_gast, f_kabine, f_notizen,
+                        f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
+                        kabine="", notizen=f_notizen, erstellt_von=my_team,
                     )
-                    st.success(f"✅ Anfrage #{rid} erfolgreich eingereicht!")
-                    # ── E-Mail an Funktionspostfach ──────────────────────────
+                    st.success(f"✅ Anfrage #{rid} eingereicht!")
                     html = _mail_anfrage_html(
-                        rid, f_datum, f_uhrzeit, f_platz,
-                        f_heim, f_gast, f_kabine, f_notizen,
-                        conflicts, typ="Neue Spielanfrage",
+                        rid, f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
+                        "", f_notizen, conflicts, typ="Neue Spielanfrage",
                     )
                     ok, err = send_email(
-                        f"[FCTM] Neue Spielanfrage #{rid}: {f_heim} vs {f_gast} "
-                        f"({f_datum.strftime('%d.%m.%Y')})",
-                        html,
+                        f"[FCTM] Neue Spielanfrage #{rid}: {heim_val} vs {f_gast.strip()} "
+                        f"({f_datum.strftime('%d.%m.%Y')})", html,
                     )
                     if ok:
-                        st.info("📧 Benachrichtigung an das Funktionspostfach gesendet.")
+                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
                     elif err != "E-Mail-Versand nicht aktiviert.":
-                        st.warning(f"📧 E-Mail konnte nicht gesendet werden: {err}")
+                        st.warning(f"📧 {err}")
 
-    with col_list:
-        st.subheader("📋 Bisherige Anfragen")
-        alle = get_all_anfragen()
-        if alle.empty:
+    # ── Tab: Änderung ────────────────────────────────────────────────────────
+    with tab_aend:
+        # Nur eigene Heimspiele anzeigen
+        eigene_aend = alle_spiele[alle_spiele["heimteam"] == my_team] \
+                      if (my_team and not alle_spiele.empty) else alle_spiele
+        if eigene_aend.empty:
+            st.info(
+                f"Keine bestätigten Heimspiele für **{my_team}** gefunden."
+                if my_team else "Noch keine bestätigten Spiele vorhanden."
+            )
+        else:
+            with st.form("aender_form"):
+                st.subheader("Spieländerung beantragen")
+                spiel_opts = {
+                    f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
+                    f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
+                    for _, m in eigene_aend.sort_values("datum").iterrows()
+                }
+                sel_label = st.selectbox("Betroffenes Spiel", list(spiel_opts.keys()))
+                sel_id    = spiel_opts[sel_label]
+                sel_match = eigene_aend[eigene_aend["id"] == sel_id].iloc[0]
+                st.markdown(
+                    f"**Aktuell:** {sel_match['datum']} {sel_match['uhrzeit']} · "
+                    f"{sel_match['platz']}"
+                )
+                st.divider()
+                st.markdown("**Gewünschte neue Daten:**")
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    a_datum = st.date_input(
+                        "Neues Datum", value=date.fromisoformat(sel_match["datum"])
+                    )
+                with ac2:
+                    cur_idx = TIME_SLOTS_TRAINING.index(sel_match["uhrzeit"]) \
+                              if sel_match["uhrzeit"] in TIME_SLOTS_TRAINING else 0
+                    a_uhrzeit = st.selectbox("Neue Uhrzeit", TIME_SLOTS_TRAINING, index=cur_idx)
+                cur_platz_idx = PITCHES_SPIEL.index(sel_match["platz"]) \
+                                if sel_match["platz"] in PITCHES_SPIEL else 0
+                a_platz = st.selectbox("Neuer Platz", PITCHES_SPIEL, index=cur_platz_idx)
+                st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
+                a_notizen = st.text_area("Begründung / Anmerkungen")
+                if st.form_submit_button("✏️ Änderung beantragen", type="primary", use_container_width=True):
+                    rid = create_anfrage_aenderung(
+                        sel_id, a_datum, a_uhrzeit, a_platz, a_notizen, erstellt_von=my_team,
+                    )
+                    st.success(f"✅ Änderungsantrag #{rid} eingereicht!")
+                    ok, err = send_email(
+                        f"[FCTM] ✏️ Änderungsantrag #{rid}: {sel_match['heimteam']} vs "
+                        f"{sel_match['gastteam']}",
+                        _mail_anfrage_html(
+                            rid, date.fromisoformat(sel_match["datum"]),
+                            sel_match["uhrzeit"], sel_match["platz"],
+                            sel_match["heimteam"], sel_match["gastteam"],
+                            "", a_notizen,
+                            [], typ=f"Änderungsantrag → {a_datum.strftime('%d.%m.%Y')} {a_uhrzeit}",
+                        ),
+                    )
+                    if ok:
+                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.":
+                        st.warning(f"📧 {err}")
+
+    # ── Tab: Stornierung ─────────────────────────────────────────────────────
+    with tab_storni:
+        eigene_storni = alle_spiele[alle_spiele["heimteam"] == my_team] \
+                        if (my_team and not alle_spiele.empty) else alle_spiele
+        if eigene_storni.empty:
+            st.info(
+                f"Keine bestätigten Heimspiele für **{my_team}** gefunden."
+                if my_team else "Noch keine bestätigten Spiele vorhanden."
+            )
+        else:
+            with st.form("storni_form"):
+                st.subheader("Spielstornierung beantragen")
+                storni_opts = {
+                    f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
+                    f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
+                    for _, m in eigene_storni.sort_values("datum").iterrows()
+                }
+                s_label = st.selectbox("Zu storrierendes Spiel", list(storni_opts.keys()))
+                s_id    = storni_opts[s_label]
+                s_match = eigene_storni[eigene_storni["id"] == s_id].iloc[0]
+                st.markdown(
+                    f"**Spiel:** {s_match['heimteam']} vs {s_match['gastteam']} · "
+                    f"{s_match['datum']} {s_match['uhrzeit']} · {s_match['platz']}"
+                )
+                s_notizen = st.text_area("Begründung / Anmerkungen")
+                if st.form_submit_button("❌ Stornierung beantragen", type="secondary", use_container_width=True):
+                    rid = create_anfrage_stornierung(s_id, s_notizen, erstellt_von=my_team)
+                    st.success(f"✅ Stornierungsantrag #{rid} eingereicht!")
+                    ok, err = send_email(
+                        f"[FCTM] ❌ Stornierungsantrag #{rid}: {s_match['heimteam']} vs "
+                        f"{s_match['gastteam']} ({s_match['datum']})",
+                        _mail_anfrage_html(
+                            rid, date.fromisoformat(s_match["datum"]),
+                            s_match["uhrzeit"], s_match["platz"],
+                            s_match["heimteam"], s_match["gastteam"],
+                            "", s_notizen,
+                            [], typ="Stornierungsantrag",
+                        ),
+                    )
+                    if ok:
+                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.":
+                        st.warning(f"📧 {err}")
+
+    # ── Tab: Meine Anfragen ──────────────────────────────────────────────────
+    with tab_meine:
+        alle_anf = get_all_anfragen()
+        if alle_anf.empty:
+            meine_anf = alle_anf
+        elif my_team and "erstellt_von" in alle_anf.columns:
+            meine_anf = alle_anf[alle_anf["erstellt_von"] == my_team]
+        elif my_team:
+            meine_anf = alle_anf[alle_anf["heimteam"] == my_team]
+        else:
+            meine_anf = alle_anf
+
+        if meine_anf.empty:
             st.info("Noch keine Anfragen vorhanden.")
         else:
-            for _, r in alle.iterrows():
-                css_extra = {
-                    "ausstehend": "anfrage-offen",
-                    "genehmigt":  "anfrage-ok",
-                    "abgelehnt":  "anfrage-abgelehnt",
-                }.get(r["status"], "")
+            for _, r in meine_anf.sort_values("erstellt_am", ascending=False).iterrows():
+                t = r.get("anfrage_typ") or "neu"
+                kabine_info = f' &nbsp;|&nbsp; 🚿 {r["kabine"]}' if r.get("kabine") else \
+                              ' &nbsp;|&nbsp; <em style="color:#666;">Kabine: wird vom Admin vergeben</em>'
                 st.markdown(
-                    f'<div class="anfrage-card {css_extra}">'
+                    f'<div class="anfrage-card">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;">'
                     f'<span style="color:#f0f0f0;font-weight:bold;">'
                     f'⚽ {r["heimteam"]} vs {r["gastteam"]}</span>'
-                    f'{status_badge(r["status"])}</div>'
+                    f'<span>{typ_badge(t)}&nbsp;{status_badge(r["status"])}</span></div>'
                     f'<div style="color:#aaa;font-size:12px;margin-top:6px;">'
-                    f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]} '
-                    f'&nbsp;|&nbsp; 🏟️ {r["platz"]} &nbsp;|&nbsp; '
-                    f'🚿 {r.get("kabine","–")}</div>'
-                    "</div>",
+                    f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]}'
+                    + (f' → {r["neues_datum"]} {r["neue_uhrzeit"]}' if t == "aenderung" and r.get("neues_datum") else "")
+                    + f' &nbsp;|&nbsp; 🏟️ {r["platz"]}{kabine_info}</div>'
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -1362,6 +1717,25 @@ def page_anfragen_verwalten() -> None:
                     f"{r['datum']} {r['uhrzeit']}  |  {r['platz']}",
                     expanded=True,
                 ):
+                    t_badge = typ_badge(r.get('anfrage_typ') or 'neu')
+                    st.markdown(t_badge, unsafe_allow_html=True)
+                    # Bei Änderungs-/Stornierungsanträgen: referenziertes Spiel anzeigen
+                    if (r.get('anfrage_typ') or 'neu') in ('aenderung', 'stornierung'):
+                        ref_id = r.get('spiel_id')
+                        if ref_id:
+                            alle_sp = get_all_matches()
+                            ref_row = alle_sp[alle_sp['id'] == ref_id]
+                            if not ref_row.empty:
+                                rm = ref_row.iloc[0]
+                                st.markdown(
+                                    f'<div style="background:#1a0005;border-left:3px solid #f0a500;'
+                                    f'padding:6px 10px;border-radius:4px;margin-bottom:8px;'
+                                    f'font-size:12px;color:#ccc;">'
+                                    f'Referenzspiel #{rm["id"]}: '
+                                    f'{rm["heimteam"]} vs {rm["gastteam"]} · '
+                                    f'{rm["datum"]} {rm["uhrzeit"]} · {rm["platz"]}</div>',
+                                    unsafe_allow_html=True,
+                                )
                     ic1, ic2, ic3, ic4 = st.columns(4)
                     ic1.markdown(f"**Datum:** {r['datum']}")
                     ic2.markdown(f"**Zeit:** {r['uhrzeit']}")
@@ -1370,6 +1744,13 @@ def page_anfragen_verwalten() -> None:
                     st.markdown(
                         f"**Heim:** {r['heimteam']} &nbsp;|&nbsp; **Gast:** {r['gastteam']}"
                     )
+                    if r.get("erstellt_von"):
+                        st.markdown(
+                            f'<span style="background:#1e3a5f;color:#90c8ff;padding:2px 8px;'
+                            f'border-radius:10px;font-size:11px;">📤 Eingereicht von: '
+                            f'{r["erstellt_von"]}</span>',
+                            unsafe_allow_html=True,
+                        )
                     if r.get("notizen"):
                         st.markdown(f"*Notiz: {r['notizen']}*")
 
@@ -1389,6 +1770,23 @@ def page_anfragen_verwalten() -> None:
 
                     bc1, bc2 = st.columns(2)
                     with bc1:
+                        # Kabinenzuweisung für neue Anfragen
+                        if (r.get("anfrage_typ") or "neu") in ("neu", "aenderung"):
+                            freie_k_gen = get_free_kabinen(date.fromisoformat(r["datum"]), r["uhrzeit"])
+                            gen_kc1, gen_kc2 = st.columns(2)
+                            with gen_kc1:
+                                gen_kab_h = st.selectbox(
+                                    "🏠 Kabine Heim",
+                                    freie_k_gen,
+                                    key=f"gkh_{r['id']}",
+                                )
+                            with gen_kc2:
+                                rest_gen = [k for k in freie_k_gen if k != gen_kab_h]
+                                gen_kab_g = st.selectbox(
+                                    "✈️ Kabine Gast",
+                                    rest_gen if rest_gen else freie_k_gen,
+                                    key=f"gkg_{r['id']}",
+                                )
                         if st.button(
                             "📋 Genehmigen → DFBnet eintragen",
                             key=f"ok_{r['id']}", use_container_width=True,
@@ -1398,8 +1796,23 @@ def page_anfragen_verwalten() -> None:
                             elif conflicts and not approved:
                                 st.error("Bitte Trainer-Zustimmung bestätigen.")
                             else:
+                                # Kabine in die Anfrage schreiben (außer bei Stornierungen)
+                                if (r.get("anfrage_typ") or "neu") in ("neu", "aenderung"):
+                                    kabine_gen = f"{gen_kab_h} / {gen_kab_g}"
+                                    _kconn = db_connect()
+                                    if (r.get("anfrage_typ") or "neu") == "aenderung":
+                                        _kconn.execute(
+                                            "UPDATE spielanfragen SET neue_kabine=? WHERE id=?",
+                                            (kabine_gen, r["id"]),
+                                        )
+                                    else:
+                                        _kconn.execute(
+                                            "UPDATE spielanfragen SET kabine=? WHERE id=?",
+                                            (kabine_gen, r["id"]),
+                                        )
+                                    _kconn.commit()
+                                    _kconn.close()
                                 approve_anfrage(r["id"], conflicts if conflicts else [])
-                                # Info-Mail ans Funktionspostfach: DFBnet eintragen!
                                 html = _mail_anfrage_html(
                                     r["id"],
                                     date.fromisoformat(r["datum"]),
@@ -1468,24 +1881,47 @@ def page_anfragen_verwalten() -> None:
                         "✅ DFBnet eingetragen – Spiel übernehmen & Trainer benachrichtigen",
                         key=f"dfb_{r['id']}", use_container_width=True, type="primary",
                     ):
-                        sid = confirm_dfbnet(r["id"])
-                        st.success(
-                            f"✅ Spiel #{sid} im Dashboard gespeichert, DFBnet bestätigt!"
-                        )
-                        # Trainer-Mail senden
+                        typ_ = r.get('anfrage_typ') or 'neu'
+                        sid  = confirm_dfbnet(r["id"])
+                        if typ_ == 'stornierung':
+                            st.success("✅ Spiel storniert und aus dem Dashboard entfernt!")
+                        elif typ_ == 'aenderung':
+                            st.success(f"✅ Spiel #{sid} aktualisiert, DFBnet bestätigt!")
+                        else:
+                            st.success(f"✅ Spiel #{sid} im Dashboard gespeichert, DFBnet bestätigt!")
+                        # ── Typ-spezifische Trainer-Mail ────────────────────
                         if custom_mail.strip():
-                            trainer_html = _mail_trainer_html(
-                                date.fromisoformat(r["datum"]),
-                                r["uhrzeit"], r["platz"],
-                                r["heimteam"], r["gastteam"],
-                                r.get("kabine", ""), "",
-                            )
-                            ok2, err2 = send_email(
-                                f"[FCTM] ⚽ Spielbestätigung: {r['heimteam']} vs {r['gastteam']}"
-                                f" am {r['datum']}",
-                                trainer_html,
-                                to=custom_mail.strip(),
-                            )
+                            if typ_ == 'stornierung':
+                                trainer_html = _mail_trainer_stornierung_html(
+                                    date.fromisoformat(r['datum']),
+                                    r['uhrzeit'], r['platz'],
+                                    r['heimteam'], r['gastteam'],
+                                    r.get('notizen',''),
+                                )
+                                subj = (f"[FCTM] ❌ Spielabsage: {r['heimteam']} vs "
+                                        f"{r['gastteam']} ({r['datum']})")
+                            elif typ_ == 'aenderung':
+                                trainer_html = _mail_trainer_aenderung_html(
+                                    date.fromisoformat(r['datum']),
+                                    r['uhrzeit'], r['platz'], r.get('kabine',''),
+                                    date.fromisoformat(r['neues_datum']) if r.get('neues_datum') else date.fromisoformat(r['datum']),
+                                    r.get('neue_uhrzeit') or r['uhrzeit'],
+                                    r.get('neuer_platz')  or r['platz'],
+                                    r.get('neue_kabine')  or r.get('kabine',''),
+                                    r['heimteam'], r['gastteam'],
+                                )
+                                subj = (f"[FCTM] ✏️ Spieländerung: {r['heimteam']} vs "
+                                        f"{r['gastteam']} ({r['datum']})")
+                            else:
+                                trainer_html = _mail_trainer_html(
+                                    date.fromisoformat(r['datum']),
+                                    r['uhrzeit'], r['platz'],
+                                    r['heimteam'], r['gastteam'],
+                                    r.get('kabine',''), '',
+                                )
+                                subj = (f"[FCTM] ⚽ Spielbestätigung: {r['heimteam']} vs "
+                                        f"{r['gastteam']} am {r['datum']}")
+                            ok2, err2 = send_email(subj, trainer_html, to=custom_mail.strip())
                             if ok2:
                                 st.info(f"📧 Trainer-Mail an {custom_mail.strip()} gesendet.")
                             elif err2 != "E-Mail-Versand nicht aktiviert.":
@@ -1694,32 +2130,131 @@ def page_admin_spiel_anlegen() -> None:
                 '<span style="background:#7c3aed;color:#fff;padding:1px 7px;'
                 'border-radius:10px;font-size:10px;">📋 DFBnet offen</span>'
             )
-            st.markdown(
-                f'<div class="match-card">'
-                f'<div style="display:flex;justify-content:space-between;">'
-                f'<span style="color:#ffa0b0;font-size:11px;">'
-                f'{m["datum_dt"].strftime("%d.%m.%Y")} · {m["uhrzeit"]} Uhr</span>'
-                f'{dfb_badge}</div>'
-                f'<div style="color:#fff;font-weight:bold;margin:4px 0;">'
-                f'⚽ {m["heimteam"]} vs {m["gastteam"]}</div>'
-                f'<div style="color:#888;font-size:12px;">'
-                f'🏟️ {m["platz"]} · 🚿 {m.get("kabine","–")}</div>'
-                "</div>",
-                unsafe_allow_html=True,
-            )
-    st.divider()
-    st.subheader("🗑️ Spiel löschen")
-    all_m2 = get_all_matches()
-    if not all_m2.empty:
-        opts = {
-            f"{pd.to_datetime(r['datum']).strftime('%d.%m.%Y')} – "
-            f"{r['heimteam']} vs {r['gastteam']}": r["id"]
-            for _, r in all_m2.iterrows()
-        }
-        del_key = st.selectbox("Auswählen", list(opts.keys()))
-        if st.button("Löschen", type="secondary", use_container_width=True):
-            delete_match(opts[del_key])
-            st.rerun()
+            with st.expander(
+                f"⚽ #{m['id']} – {m['heimteam']} vs {m['gastteam']}  |  "
+                f"{m['datum_dt'].strftime('%d.%m.%Y')} {m['uhrzeit']}  |  {m['platz']}",
+                expanded=False,
+            ):
+                sc1, sc2, sc3 = st.columns(3)
+                sc1.markdown(f"**Datum:** {m['datum_dt'].strftime('%d.%m.%Y')}")
+                sc2.markdown(f"**Zeit:** {m['uhrzeit']}")
+                sc3.markdown(f"**Platz:** {m['platz']}")
+                st.markdown(
+                    f"**Kabine:** {m.get('kabine','–')}  &nbsp;  {dfb_badge}",
+                    unsafe_allow_html=True,
+                )
+
+                # ── Bearbeiten ────────────────────────────────────────────
+                st.divider()
+                st.markdown("**✏️ Spiel bearbeiten**")
+                with st.form(f"edit_match_{m['id']}"):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        e_datum = st.date_input(
+                            "Neues Datum", value=date.fromisoformat(m["datum"]),
+                            key=f"ed_{m['id']}",
+                        )
+                    with ec2:
+                        cur_idx = TIME_SLOTS_TRAINING.index(m["uhrzeit"]) \
+                                  if m["uhrzeit"] in TIME_SLOTS_TRAINING else 0
+                        e_uhrzeit = st.selectbox(
+                            "Neue Uhrzeit", TIME_SLOTS_TRAINING,
+                            index=cur_idx, key=f"eu_{m['id']}",
+                        )
+                    cur_pi = PITCHES_SPIEL.index(m["platz"]) \
+                             if m["platz"] in PITCHES_SPIEL else 0
+                    e_platz = st.selectbox(
+                        "Neuer Platz", PITCHES_SPIEL, index=cur_pi, key=f"ep_{m['id']}"
+                    )
+                    freie_k = get_free_kabinen(e_datum, e_uhrzeit)
+                    ek1, ek2 = st.columns(2)
+                    with ek1:
+                        e_kab_h = st.selectbox(
+                            "🏠 Kabine Heim", freie_k, key=f"ekh_{m['id']}"
+                        )
+                    with ek2:
+                        rest_ek = [k for k in freie_k if k != e_kab_h]
+                        e_kab_g = st.selectbox(
+                            "✈️ Kabine Gast", rest_ek if rest_ek else freie_k,
+                            key=f"ekg_{m['id']}",
+                        )
+                    e_notizen = st.text_area(
+                        "Notizen", value=m.get("notizen",""), key=f"en_{m['id']}"
+                    )
+                    e_tmail = st.text_input(
+                        "Trainer-E-Mail (für Änderungs-Mail)",
+                        value=get_trainer_email_for_team(m["heimteam"]),
+                        key=f"etm_{m['id']}",
+                    )
+                    send_aend_mail = st.checkbox(
+                        "📧 Trainer über Änderung informieren", value=True,
+                        key=f"esc_{m['id']}",
+                    )
+                    if st.form_submit_button(
+                        "💾 Änderungen speichern", type="primary", use_container_width=True
+                    ):
+                        if e_kab_h == e_kab_g:
+                            st.error("Heim und Gast können nicht dieselbe Kabine nutzen.")
+                        else:
+                            neue_kabine = f"{e_kab_h} / {e_kab_g}"
+                            update_match_details(
+                                m["id"], e_datum, e_uhrzeit, e_platz, neue_kabine, e_notizen
+                            )
+                            st.success("✅ Spiel aktualisiert!")
+                            if send_aend_mail and e_tmail.strip():
+                                aend_html = _mail_trainer_aenderung_html(
+                                    date.fromisoformat(m["datum"]),
+                                    m["uhrzeit"], m["platz"], m.get("kabine",""),
+                                    e_datum, e_uhrzeit, e_platz, neue_kabine,
+                                    m["heimteam"], m["gastteam"],
+                                )
+                                ok3, err3 = send_email(
+                                    f"[FCTM] ✏️ Spieländerung: {m['heimteam']} vs "
+                                    f"{m['gastteam']} ({m['datum']})",
+                                    aend_html, to=e_tmail.strip(),
+                                )
+                                if ok3:
+                                    st.info(f"📧 Änderungs-Mail an {e_tmail.strip()} gesendet.")
+                                elif err3 != "E-Mail-Versand nicht aktiviert.":
+                                    st.warning(f"📧 Mail-Fehler: {err3}")
+                            st.rerun()
+
+                # ── Löschen ───────────────────────────────────────────────
+                st.divider()
+                st.markdown("**🗑️ Spiel löschen**")
+                d_tmail = st.text_input(
+                    "Trainer-E-Mail (für Absage-Mail, optional)",
+                    value=get_trainer_email_for_team(m["heimteam"]),
+                    key=f"dtm_{m['id']}",
+                )
+                d_grund = st.text_input(
+                    "Begründung (optional)", key=f"dg_{m['id']}"
+                )
+                send_del_mail = st.checkbox(
+                    "📧 Trainer über Absage informieren", value=True,
+                    key=f"dsc_{m['id']}",
+                )
+                if st.button(
+                    f"🗑️ Spiel #{m['id']} löschen", key=f"del_{m['id']}",
+                    type="secondary", use_container_width=True,
+                ):
+                    if send_del_mail and d_tmail.strip():
+                        del_html = _mail_trainer_stornierung_html(
+                            date.fromisoformat(m["datum"]),
+                            m["uhrzeit"], m["platz"],
+                            m["heimteam"], m["gastteam"], d_grund,
+                        )
+                        ok4, err4 = send_email(
+                            f"[FCTM] ❌ Spielabsage: {m['heimteam']} vs "
+                            f"{m['gastteam']} ({m['datum']})",
+                            del_html, to=d_tmail.strip(),
+                        )
+                        if ok4:
+                            st.info(f"📧 Absage-Mail an {d_tmail.strip()} gesendet.")
+                        elif err4 != "E-Mail-Versand nicht aktiviert.":
+                            st.warning(f"📧 Mail-Fehler: {err4}")
+                    delete_match(m["id"])
+                    st.rerun()
 
 
 def page_saisonplanung() -> None:
@@ -2319,9 +2854,30 @@ def page_login() -> None:
                 "</p>",
                 unsafe_allow_html=True,
             )
+            # Teams aus Saisonplanung laden
+            _conn_t = db_connect()
+            _teams_db = [r[0] for r in _conn_t.execute(
+                "SELECT DISTINCT team FROM saisonplanung "
+                "WHERE team IS NOT NULL AND team != '' ORDER BY team"
+            ).fetchall()]
+            _conn_t.close()
+            _team_opts = ["– Mannschaft wählen –"] + _teams_db + ["Sonstige / Individuell"]
+            u_team_sel = st.selectbox("Mannschaft", _team_opts, key="login_team_sel")
+            if u_team_sel == "Sonstige / Individuell":
+                u_team_val = st.text_input(
+                    "Mannschaft (manuell eingeben)",
+                    placeholder="z. B. 3. Mannschaft",
+                    key="login_team_txt",
+                )
+            else:
+                u_team_val = "" if u_team_sel == "– Mannschaft wählen –" else u_team_sel
             if st.button("▶️ Als Benutzer fortfahren", type="primary", use_container_width=True):
-                st.session_state.role = "benutzer"
-                st.rerun()
+                if not u_team_val.strip():
+                    st.error("Bitte zuerst eine Mannschaft auswählen oder eingeben.")
+                else:
+                    st.session_state.role = "benutzer"
+                    st.session_state.team = u_team_val.strip()
+                    st.rerun()
 
         with tab_a:
             st.markdown(
@@ -2386,10 +2942,15 @@ def main() -> None:
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         role       = st.session_state.role
+        my_team_sb = st.session_state.get("team", "")
         badge_html = (
             '<span class="role-badge-admin">👑 Administrator</span>'
             if role == "admin"
             else '<span class="role-badge-user">👤 Benutzer</span>'
+        )
+        team_line = (
+            f'<br><span style="color:#ffa0b0;font-size:12px;">⚽ {my_team_sb}</span>'
+            if role == "benutzer" and my_team_sb else ""
         )
         st.markdown(
             '<div style="text-align:center;padding:16px 0 10px 0;">'
@@ -2397,6 +2958,7 @@ def main() -> None:
             '<span style="color:#fff;font-size:18px;font-weight:bold;">FCTM</span><br>'
             '<span style="color:#ffa0b0;font-size:11px;">Spielbetrieb-Manager</span><br>'
             f'<div style="margin-top:8px;">{badge_html}</div>'
+            f'{team_line}'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -2428,6 +2990,7 @@ def main() -> None:
         st.divider()
         if st.button("🚪 Abmelden", type="secondary", use_container_width=True):
             st.session_state.role = None
+            st.session_state.team = None
             st.rerun()
         st.caption("Version 2.0.0 · FCTM")
 
