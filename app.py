@@ -255,6 +255,144 @@ hr { border-color:#e0e0e0 !important; }
 [data-testid="stExpander"] summary:hover {
     color: #c00000 !important;
 }
+
+/* ─── Form-Submit-Buttons (st.form_submit_button) ─────────────────────── */
+.stFormSubmitButton > button {
+    background: #c00000 !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+}
+.stFormSubmitButton > button:hover { background: #a00000 !important; }
+
+/* ─── Alle Input-Felder (Text, Number, Date, Time) ────────────────────── */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stDateInput"] input,
+[data-testid="stTimeInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: #ffffff !important;
+    color: #1a1a1a !important;
+    border: 1px solid #cccccc !important;
+    border-radius: 6px !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stNumberInput"] input:focus,
+[data-testid="stDateInput"] input:focus,
+[data-testid="stTimeInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #c00000 !important;
+    box-shadow: 0 0 0 2px rgba(192,0,0,0.15) !important;
+}
+
+/* ─── Selectbox & Multiselect ─────────────────────────────────────────── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stMultiSelect"] > div > div {
+    background: #ffffff !important;
+    border: 1px solid #cccccc !important;
+    border-radius: 6px !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stSelectbox"] > div > div:focus-within,
+[data-testid="stMultiSelect"] > div > div:focus-within {
+    border-color: #c00000 !important;
+    box-shadow: 0 0 0 2px rgba(192,0,0,0.15) !important;
+}
+/* Dropdown-Liste */
+[data-baseweb="popover"] ul,
+[data-baseweb="menu"] {
+    background: #ffffff !important;
+    border: 1px solid #e0e0e0 !important;
+}
+[data-baseweb="menu"] li:hover {
+    background: #fdf0f0 !important;
+    color: #c00000 !important;
+}
+/* Ausgewählter Tag in Multiselect */
+[data-baseweb="tag"] {
+    background: #c00000 !important;
+    color: #fff !important;
+}
+
+/* ─── Checkbox & Radio ────────────────────────────────────────────────── */
+[data-testid="stCheckbox"] input:checked + div,
+[data-testid="stRadio"] input:checked + div {
+    background: #c00000 !important;
+    border-color: #c00000 !important;
+}
+[data-testid="stCheckbox"] label,
+[data-testid="stRadio"] label {
+    color: #1a1a1a !important;
+}
+
+/* ─── Toggle (st.toggle) ──────────────────────────────────────────────── */
+[data-testid="stToggle"] [role="switch"][aria-checked="true"] {
+    background: #c00000 !important;
+}
+
+/* ─── Fortschrittsbalken / Spinner-Farbe ──────────────────────────────── */
+[data-testid="stProgressBar"] > div {
+    background: #c00000 !important;
+}
+
+/* ─── Obere Streamlit-Toolbar ausblenden / dezent ─────────────────────── */
+[data-testid="stToolbar"],
+[data-testid="stDecoration"] {
+    background: transparent !important;
+}
+[data-testid="stToolbar"] * { color: #888 !important; }
+
+/* ─── Header-Linie oben (farbige Linie unter Toolbar) ────────────────── */
+[data-testid="stHeader"] {
+    background: #ffffff !important;
+    border-bottom: 2px solid #c00000 !important;
+}
+
+/* ─── Sidebar-Collapse-Button ─────────────────────────────────────────── */
+[data-testid="collapsedControl"],
+button[data-testid="baseButton-headerNoPadding"] {
+    color: #c00000 !important;
+}
+
+/* ─── Warnungen / Info-Boxen ──────────────────────────────────────────── */
+[data-testid="stAlert"][kind="info"],
+div.stAlert > div[data-baseweb="notification"][kind="info"] {
+    background: #fdf0f0 !important;
+    border-left: 4px solid #c00000 !important;
+    color: #700000 !important;
+}
+
+/* ─── Divider ─────────────────────────────────────────────────────────── */
+[data-testid="stMarkdownContainer"] hr {
+    border-color: #e0e0e0 !important;
+}
+
+/* ─── Tabellen / DataFrames ───────────────────────────────────────────── */
+[data-testid="stDataFrame"] th {
+    background: #c00000 !important;
+    color: #fff !important;
+}
+[data-testid="stDataFrame"] tr:hover td {
+    background: #fdf0f0 !important;
+}
+
+/* ─── Sidebar: aktiver Menüpunkt ──────────────────────────────────────── */
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-focused="true"],
+[data-testid="stSidebar"] [data-testid="stRadio"] input:checked ~ div {
+    color: #ffffff !important;
+    font-weight: 700 !important;
+}
+
+/* ─── Number-Input Stepper-Buttons ───────────────────────────────────── */
+[data-testid="stNumberInput"] button {
+    background: #f5f5f5 !important;
+    color: #c00000 !important;
+    border-color: #cccccc !important;
+}
+[data-testid="stNumberInput"] button:hover {
+    background: #fdf0f0 !important;
+}
 </style>
 """
 
