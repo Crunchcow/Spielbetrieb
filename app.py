@@ -84,6 +84,18 @@ html, body, [data-testid="stAppViewContainer"],
 [data-testid="stSidebar"] [data-testid="stRadio"] label:hover { opacity:0.85; }
 [data-testid="stSidebar"] .stMarkdown a { color: #ffd6d6 !important; }
 [data-testid="stSidebar"] hr { border-color: #e03030 !important; }
+/* Sidebar-Buttons: weißer Hintergrund, roter Text */
+[data-testid="stSidebar"] .stButton > button {
+    background: #ffffff !important;
+    color: #c00000 !important;
+    border: 2px solid #ffffff !important;
+    font-weight: 700 !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: #fdf0f0 !important;
+    color: #a00000 !important;
+    border-color: #fdf0f0 !important;
+}
 
 /* ─── Header-Banner ───────────────────────────────────────────────────── */
 .main-header {
@@ -4151,7 +4163,7 @@ def main() -> None:
             st.caption(f"📋 {df_n} Trainingseinheiten geladen")
 
         st.divider()
-        if st.button("🚪 Abmelden", type="secondary", use_container_width=True):
+        if st.button("🚪 Abmelden", type="primary", use_container_width=True):
             _tok = st.session_state.get("_session_token")
             session_delete(_tok)
             _cookies.remove(_COOKIE_NAME)
