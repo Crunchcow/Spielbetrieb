@@ -6,19 +6,23 @@ Rollen: Admin (vollständiger Zugriff) · Benutzer (Anfragen & Trainingsplan)
 """
 
 import io
+import os
 import smtplib
 import sqlite3
 from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import msal
+import secrets
 import pandas as pd
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 
 # ---------------------------------------------------------------------------
 # Konstanten
 # ---------------------------------------------------------------------------
-DB_PATH = "fctm.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fctm.db")
 DEFAULT_ADMIN_PIN = "1234"
 
 DAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
@@ -51,70 +55,84 @@ PITCH_HALVES: dict[str, list[str]] = {
 LOCKER_ROOMS = [f"Kabine {i}" for i in range(1, 7)]  # 6 Kabinen
 
 # ---------------------------------------------------------------------------
-# CSS – Vereinsfarben Rot & Weiß
+# CSS – Vereinsfarben Rot & Weiß (Light-Mode, analog Kursanmeldung)
 # ---------------------------------------------------------------------------
 CSS = """
 <style>
 /* ─── Basis ────────────────────────────────────────────────────────────── */
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: #0d0003 !important;
-    color: #f0f0f0;
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], .main {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
 }
+
+/* ─── Sidebar (rote Navbar analog Kursanmeldung) ──────────────────────── */
 [data-testid="stSidebar"] {
-    background: #130005 !important;
-    border-right: 1px solid #5c0010;
+    background: #c00000 !important;
+    border-right: none !important;
 }
-[data-testid="stSidebar"] * { color: #f0f0f0 !important; }
+[data-testid="stSidebar"] * {
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div,
+[data-testid="stSidebar"] input {
+    background: #a00000 !important;
+    color: #ffffff !important;
+    border-color: #e03030 !important;
+}
+/* Sidebar-Radio aktiv + hover */
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover { opacity:0.85; }
+[data-testid="stSidebar"] .stMarkdown a { color: #ffd6d6 !important; }
+[data-testid="stSidebar"] hr { border-color: #e03030 !important; }
 
 /* ─── Header-Banner ───────────────────────────────────────────────────── */
 .main-header {
-    background: linear-gradient(135deg, #6b0010 0%, #9b0018 40%, #C8102E 100%);
+    background: linear-gradient(135deg, #a00000 0%, #c00000 60%, #d91025 100%);
     padding: 22px 28px;
-    border-radius: 14px;
+    border-radius: 12px;
     margin-bottom: 22px;
-    border: 1px solid #e8344a;
-    box-shadow: 0 4px 20px rgba(200,16,46,0.4);
+    box-shadow: 0 3px 14px rgba(192,0,0,0.25);
 }
 .main-header h1 { margin:0; font-size:26px; color:#ffffff;
-                  text-shadow:0 1px 4px rgba(0,0,0,.4); }
-.main-header p  { margin:4px 0 0 0; opacity:.8; color:#ffd6dc; font-size:14px; }
+                  text-shadow:0 1px 3px rgba(0,0,0,.3); }
+.main-header p  { margin:4px 0 0 0; opacity:.85; color:#ffdada; font-size:14px; }
 
 /* ─── Login ───────────────────────────────────────────────────────────── */
 .login-box {
-    background: linear-gradient(160deg, #1a0005 0%, #2d0010 100%);
-    border: 2px solid #C8102E;
-    border-radius: 18px;
+    background: #ffffff;
+    border: 2px solid #c00000;
+    border-radius: 16px;
     padding: 40px 36px;
     max-width: 440px;
     margin: 60px auto 0 auto;
-    box-shadow: 0 8px 32px rgba(200,16,46,.5);
+    box-shadow: 0 6px 24px rgba(192,0,0,.15);
     text-align: center;
 }
-.login-box h2 { color:#ffffff; font-size:22px; margin-bottom:6px; }
-.login-box p  { color:#ffa0b0; font-size:13px; margin-bottom:24px; }
+.login-box h2 { color:#c00000; font-size:22px; margin-bottom:6px; }
+.login-box p  { color:#555; font-size:13px; margin-bottom:24px; }
 
 /* ─── Rollen-Badge ────────────────────────────────────────────────────── */
 .role-badge-admin {
     display:inline-block; padding:3px 14px; border-radius:20px;
-    background:#C8102E; color:#fff; font-size:12px; font-weight:bold;
+    background:#c00000; color:#fff; font-size:12px; font-weight:bold;
 }
 .role-badge-user {
     display:inline-block; padding:3px 14px; border-radius:20px;
-    background:#2d0010; color:#ffa0b0; border:1px solid #C8102E;
+    background:#fff; color:#c00000; border:1px solid #c00000;
     font-size:12px; font-weight:bold;
 }
 
 /* ─── Slot-Karten Dashboard ───────────────────────────────────────────── */
 .slot-card {
     border-radius:7px; padding:7px 10px; margin:3px 0;
-    color:#f0f0f0; font-size:12px; font-weight:500; line-height:1.4;
+    font-size:12px; font-weight:500; line-height:1.4;
 }
-.slot-training { background:#2d0010; border-left:4px solid #C8102E; }
-.slot-match    { background:#1a1400; border-left:4px solid #f0a500; }
-.slot-locked   { background:#4a0000; border-left:4px solid #ff0000;
-                 text-align:center; font-weight:bold; }
-.slot-free     { background:#130005; border-left:4px solid #3a0010;
-                 color:#6c3040; text-align:center; }
+.slot-training { background:#fdf0f0; border-left:4px solid #c00000; color:#3a0000; }
+.slot-match    { background:#fffbea; border-left:4px solid #d08000; color:#3a2a00; }
+.slot-locked   { background:#ffe0e0; border-left:4px solid #c00000;
+                 text-align:center; font-weight:bold; color:#700000; }
+.slot-free     { background:#f5f5f5; border-left:4px solid #cccccc;
+                 color:#aaaaaa; text-align:center; }
 
 /* ─── Tages-Header ────────────────────────────────────────────────────── */
 .day-header {
@@ -124,88 +142,119 @@ html, body, [data-testid="stAppViewContainer"] {
 
 /* ─── Status-Karten ───────────────────────────────────────────────────── */
 .status-card-ok {
-    background:#1a0005; border:2px solid #C8102E; border-radius:10px;
-    padding:16px; text-align:center; min-height:110px;
+    background:#fff; border:2px solid #c00000; border-radius:10px;
+    padding:16px; text-align:center; min-height:110px; color:#1a1a1a;
 }
 .status-card-locked {
-    background:#3d0000; border:2px solid #ff0000; border-radius:10px;
-    padding:16px; text-align:center; min-height:110px;
+    background:#ffe0e0; border:2px solid #c00000; border-radius:10px;
+    padding:16px; text-align:center; min-height:110px; color:#700000;
 }
 
 /* ─── Anfrage-Karten ──────────────────────────────────────────────────── */
 .anfrage-card {
-    background:#1a0005; border:1px solid #5c0010;
-    border-radius:10px; padding:13px 16px; margin-bottom:9px;
+    background:#fff; border:1px solid #e0e0e0;
+    border-radius:10px; padding:13px 16px; margin-bottom:9px; color:#1a1a1a;
 }
-.anfrage-offen    { border-left:4px solid #f0a500; }
-.anfrage-ok       { border-left:4px solid #22c55e; }
-.anfrage-abgelehnt{ border-left:4px solid #ef4444; }
+.anfrage-offen    { border-left:4px solid #d08000; }
+.anfrage-ok       { border-left:4px solid #22a050; }
+.anfrage-abgelehnt{ border-left:4px solid #c00000; }
 
 /* ─── Match-Karte ─────────────────────────────────────────────────────── */
 .match-card {
-    background:#1a0005; border:1px solid #5c0010;
-    border-radius:10px; padding:13px 16px; margin-bottom:9px;
+    background:#fff; border:1px solid #e0e0e0;
+    border-radius:10px; padding:13px 16px; margin-bottom:9px; color:#1a1a1a;
 }
 
 /* ─── Sperr-Karte ─────────────────────────────────────────────────────── */
 .lock-card {
-    background:#3d0000; border:1px solid #ff0000;
-    border-radius:10px; padding:13px 16px; margin-bottom:8px;
+    background:#ffe8e8; border:1px solid #c00000;
+    border-radius:10px; padding:13px 16px; margin-bottom:8px; color:#700000;
 }
 
 /* ─── Kabinen-Karten ──────────────────────────────────────────────────── */
 .locker-busy {
-    background:#1a0005; border:2px solid #C8102E; border-radius:10px;
-    padding:15px; text-align:center; min-height:130px;
+    background:#fff; border:2px solid #c00000; border-radius:10px;
+    padding:15px; text-align:center; min-height:130px; color:#1a1a1a;
 }
 .locker-free {
-    background:#0d0003; border:2px dashed #3a0010; border-radius:10px;
-    padding:15px; text-align:center; min-height:130px;
+    background:#f8f8f8; border:2px dashed #cccccc; border-radius:10px;
+    padding:15px; text-align:center; min-height:130px; color:#888;
 }
 .locker-conflict {
-    background:#4a0000; border:2px solid #ff0000; border-radius:10px;
-    padding:15px; text-align:center; min-height:130px;
+    background:#ffe0e0; border:2px solid #c00000; border-radius:10px;
+    padding:15px; text-align:center; min-height:130px; color:#700000;
     animation: pulse 1.5s infinite;
 }
 @keyframes pulse {
-    0%   { box-shadow:0 0 0 0   rgba(255,0,0,.4); }
-    70%  { box-shadow:0 0 0 10px rgba(255,0,0,0);  }
-    100% { box-shadow:0 0 0 0   rgba(255,0,0,0);   }
+    0%   { box-shadow:0 0 0 0   rgba(192,0,0,.35); }
+    70%  { box-shadow:0 0 0 10px rgba(192,0,0,0);  }
+    100% { box-shadow:0 0 0 0   rgba(192,0,0,0);   }
 }
 
 /* ─── Stat-Karte ──────────────────────────────────────────────────────── */
 .stat-card {
-    background:#1a0005; border:1px solid #5c0010;
-    border-radius:12px; padding:20px; text-align:center;
+    background:#fff; border:1px solid #e0e0e0;
+    border-radius:12px; padding:20px; text-align:center; color:#1a1a1a;
 }
 
 /* ─── Duplikat-Warnung ────────────────────────────────────────────────── */
 .duplicate-warning {
-    background:#4a0000; border:2px solid #ff4444;
-    border-radius:10px; padding:14px 18px; margin:8px 0;
+    background:#ffe8e8; border:2px solid #c00000;
+    border-radius:10px; padding:14px 18px; margin:8px 0; color:#700000;
 }
 
 /* ─── Streamlit overrides ─────────────────────────────────────────────── */
+/* Primär-Buttons: rot */
 .stButton > button {
-    background:#C8102E !important; color:#fff !important;
+    background:#c00000 !important; color:#fff !important;
     border:none !important; border-radius:8px !important;
+    font-weight:600 !important;
 }
-.stButton > button:hover { background:#a00020 !important; }
+.stButton > button:hover { background:#a00000 !important; }
+
+/* Sekundär-Buttons: weiß mit rotem Rand */
 .stButton > button[kind="secondary"] {
-    background:#2d0010 !important; color:#ffa0b0 !important;
-    border:1px solid #C8102E !important;
+    background:#ffffff !important; color:#c00000 !important;
+    border:1.5px solid #c00000 !important;
 }
-.stButton > button[kind="secondary"]:hover { background:#3d0018 !important; }
+.stButton > button[kind="secondary"]:hover {
+    background:#fdf0f0 !important;
+}
+
+/* Metriken */
 div[data-testid="stMetric"] {
-    background:#1a0005; border:1px solid #5c0010;
+    background:#fff; border:1px solid #e0e0e0;
     border-radius:10px; padding:12px;
 }
+
+/* Inputs */
 .stTextInput input, .stTextArea textarea,
-[data-baseweb="select"] { background:#1a0005 !important;
-                           color:#f0f0f0 !important; border-color:#5c0010 !important; }
-hr { border-color:#3a0010 !important; }
-.stDataFrame { background:#1a0005; }
+[data-baseweb="select"] {
+    background:#ffffff !important;
+    color:#1a1a1a !important;
+    border-color:#cccccc !important;
+}
+
+/* Trennlinien */
+hr { border-color:#e0e0e0 !important; }
+
+.stDataFrame { background:#fff; }
 .stAlert { border-radius:10px !important; }
+
+/* Tabs */
+[data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"] {
+    border-bottom: 3px solid #c00000 !important;
+    color: #c00000 !important;
+}
+
+/* Expander */
+[data-testid="stExpander"] {
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary:hover {
+    color: #c00000 !important;
+}
 </style>
 """
 
@@ -276,6 +325,14 @@ def init_db() -> None:
             trainer_email TEXT,
             saison        TEXT
         );
+        CREATE TABLE IF NOT EXISTS sessions (
+            token      TEXT PRIMARY KEY,
+            role       TEXT NOT NULL,
+            team       TEXT,
+            ms_name    TEXT,
+            ms_email   TEXT,
+            erstellt   TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     # Migrationen für bestehende DBs
     for migration in [
@@ -289,6 +346,8 @@ def init_db() -> None:
         "ALTER TABLE spielanfragen ADD COLUMN neuer_platz TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN neue_kabine TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN erstellt_von TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN betreff TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN nachricht TEXT",
     ]:
         try:
             conn.execute(migration)
@@ -303,6 +362,11 @@ def init_db() -> None:
         ("email_smtp_pass", ""),
         ("email_absender",  ""),
         ("email_empfaenger",""),
+        ("ms_client_id",    ""),
+        ("ms_tenant_id",    "common"),
+        ("ms_client_secret",""),
+        ("ms_redirect_uri", "http://localhost:8501"),
+        ("admin_emails",    ""),
     ]
     for key, val in defaults:
         c.execute(
@@ -399,27 +463,126 @@ def _email_cfg() -> dict:
     return {r[0]: r[1] for r in rows}
 
 
+# ---------------------------------------------------------------------------
+# Session-Persistenz (Cookie + SQLite)
+# ---------------------------------------------------------------------------
+
+_COOKIE_NAME = "fctm_session"
+_COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 Tage
+
+
+def session_save(role: str, team: str, ms_name: str, ms_email: str) -> str:
+    """Speichert Session in DB, gibt Token zurück."""
+    token = secrets.token_urlsafe(32)
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO sessions (token, role, team, ms_name, ms_email) VALUES (?,?,?,?,?)",
+        (token, role, team or "", ms_name or "", ms_email or ""),
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def session_load(token: str) -> dict | None:
+    """Lädt Session aus DB. None wenn nicht gefunden oder abgelaufen (>7 Tage)."""
+    if not token:
+        return None
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT role, team, ms_name, ms_email FROM sessions "
+        "WHERE token=? AND erstellt > datetime('now','-7 days')",
+        (token,),
+    ).fetchone()
+    conn.close()
+    if row:
+        return {"role": row[0], "team": row[1], "ms_name": row[2], "ms_email": row[3]}
+    return None
+
+
+def session_delete(token: str) -> None:
+    """Löscht Session aus DB."""
+    if not token:
+        return
+    conn = db_connect()
+    conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+
+def _graph_send(betreff: str, html_body: str, absender: str, empfaenger: list[str]) -> tuple[bool, str]:
+    """
+    Sendet eine E-Mail über Microsoft Graph API (App-only, Mail.Send).
+    Erfordert ms_client_id, ms_tenant_id, ms_client_secret in den Einstellungen.
+    """
+    import requests as _req
+    client_id     = get_setting("ms_client_id")
+    tenant_id     = get_setting("ms_tenant_id") or "common"
+    client_secret = get_setting("ms_client_secret")
+    if not client_id or not client_secret:
+        return False, "Microsoft Graph nicht konfiguriert."
+
+    # Token holen
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_resp = _req.post(token_url, data={
+        "grant_type":    "client_credentials",
+        "client_id":     client_id,
+        "client_secret": client_secret,
+        "scope":         "https://graph.microsoft.com/.default",
+    }, timeout=10)
+    if token_resp.status_code != 200:
+        return False, f"Token-Fehler: {token_resp.text}"
+    access_token = token_resp.json().get("access_token", "")
+
+    # Mail senden
+    mail_payload = {
+        "message": {
+            "subject": betreff,
+            "body": {"contentType": "HTML", "content": html_body},
+            "toRecipients": [{"emailAddress": {"address": e}} for e in empfaenger],
+        },
+        "saveToSentItems": False,
+    }
+    send_url = f"https://graph.microsoft.com/v1.0/users/{absender}/sendMail"
+    send_resp = _req.post(
+        send_url,
+        json=mail_payload,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        timeout=15,
+    )
+    if send_resp.status_code == 202:
+        return True, ""
+    return False, f"Graph-Fehler {send_resp.status_code}: {send_resp.text}"
+
+
 def send_email(betreff: str, html_body: str, to: str | None = None) -> tuple[bool, str]:
     """
     Sendet eine HTML-E-Mail.
+    Nutzt Microsoft Graph API wenn konfiguriert, sonst SMTP als Fallback.
     `to`: optionale Empfänger-Adresse (überschreibt Funktionspostfach).
-    Gibt (True, "") bei Erfolg oder (False, Fehlermeldung) zurück.
     """
     cfg = _email_cfg()
     if cfg.get("email_aktiv", "0") != "1":
         return False, "E-Mail-Versand nicht aktiviert."
-    host       = cfg.get("email_smtp_host", "")
-    port       = int(cfg.get("email_smtp_port", 587) or 587)
-    user       = cfg.get("email_smtp_user", "")
-    password   = cfg.get("email_smtp_pass", "")
-    absender   = cfg.get("email_absender",  "") or user
+    absender   = cfg.get("email_absender", "") or cfg.get("email_smtp_user", "")
     if to:
         empfaenger = [e.strip() for e in to.split(",") if e.strip()]
     else:
         empfaenger = [e.strip() for e in cfg.get("email_empfaenger", "").split(",") if e.strip()]
+    if not empfaenger:
+        return False, "Kein Empfänger konfiguriert."
 
-    if not host or not empfaenger:
-        return False, "SMTP-Host oder Empfänger fehlt."
+    # Graph API bevorzugen wenn MS-Einstellungen vorhanden
+    if get_setting("ms_client_id") and get_setting("ms_client_secret"):
+        return _graph_send(betreff, html_body, absender, empfaenger)
+
+    # Fallback: SMTP
+    host     = cfg.get("email_smtp_host", "")
+    port     = int(cfg.get("email_smtp_port", 587) or 587)
+    user     = cfg.get("email_smtp_user", "")
+    password = cfg.get("email_smtp_pass", "")
+    if not host:
+        return False, "SMTP-Host fehlt."
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = betreff
@@ -438,6 +601,73 @@ def send_email(betreff: str, html_body: str, to: str | None = None) -> tuple[boo
         return True, ""
     except Exception as exc:
         return False, str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Microsoft-Login (MSAL)
+# ---------------------------------------------------------------------------
+
+def _ms_app() -> msal.ClientApplication:
+    client_id     = get_setting("ms_client_id")
+    tenant_id     = get_setting("ms_tenant_id") or "common"
+    client_secret = get_setting("ms_client_secret")
+    authority     = f"https://login.microsoftonline.com/{tenant_id}"
+    if client_secret:
+        return msal.ConfidentialClientApplication(
+            client_id, authority=authority, client_credential=client_secret
+        )
+    return msal.PublicClientApplication(client_id, authority=authority)
+
+
+def ms_auth_url(redirect_uri: str) -> str:
+    """Gibt die Microsoft-Login-URL zurück."""
+    app = _ms_app()
+    return app.get_authorization_request_url(
+        scopes=["User.Read"],
+        redirect_uri=redirect_uri,
+    )
+
+
+def ms_exchange_code(code: str, redirect_uri: str) -> dict | None:
+    """Tauscht den OAuth-Code gegen ein Token ein."""
+    try:
+        app = _ms_app()
+        result = app.acquire_token_by_authorization_code(
+            code,
+            scopes=["User.Read"],
+            redirect_uri=redirect_uri,
+        )
+        return result if "id_token_claims" in result else None
+    except Exception:
+        return None
+
+
+def ms_role_from_email(email: str) -> tuple[str | None, str]:
+    """
+    Gibt (role, team) zurück.
+    role = 'admin'    → E-Mail in admin_emails
+    role = 'benutzer' → E-Mail in saisonplanung.trainer_email
+    role = None       → kein Zugang
+    """
+    email_lower = email.lower().strip()
+    admin_emails_raw = get_setting("admin_emails") or ""
+    admin_emails = [
+        e.strip().lower()
+        for e in admin_emails_raw.replace(",", "\n").splitlines()
+        if e.strip()
+    ]
+    if email_lower in admin_emails:
+        return "admin", ""
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT team FROM saisonplanung "
+        "WHERE LOWER(trainer_email)=? AND team IS NOT NULL AND team != '' LIMIT 1",
+        (email_lower,),
+    ).fetchone()
+    conn.close()
+    if row:
+        return "benutzer", row[0]
+    return None, ""
 
 
 def _mail_trainer_html(
@@ -667,7 +897,7 @@ def _mail_anfrage_html(
           <b>⚠️ Trainingskonflikt – betroffene Teams:</b>
           <ul style="margin:6px 0 0 0;">{items}</ul>
           <p style="margin:8px 0 0 0;font-size:13px;color:#6c4d00;">
-            Bitte diese Trainer kontaktieren und Zustimmung einholen.
+            Der anfragende Trainer ist für die Abstimmung mit den betroffenen Teams verantwortlich.
           </p>
         </div>"""
 
@@ -819,6 +1049,195 @@ def create_anfrage_stornierung(spiel_id: int, notizen: str, erstellt_von: str = 
     return rid
 
 
+def create_anfrage_verlegung(
+    spiel_id: int,
+    neues_datum: date,
+    neue_uhrzeit: str,
+    neuer_platz: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Trainer beantragt Spielverlegung – neues Datum + ggf. Zeit/Platz."""
+    conn = db_connect()
+    row = conn.execute("SELECT * FROM spiele WHERE id=?", (spiel_id,)).fetchone()
+    conn.close()
+    if not row:
+        return -1
+    sp_cols = ["id","datum","uhrzeit","platz","heimteam","gastteam","kabine","notizen"]
+    sp = dict(zip(sp_cols, row[:len(sp_cols)]))
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,"
+        "anfrage_typ,spiel_id,neues_datum,neue_uhrzeit,neuer_platz,neue_kabine,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            sp["datum"], sp["uhrzeit"], sp["platz"],
+            sp["heimteam"], sp["gastteam"], sp["kabine"], notizen,
+            "verlegung", spiel_id,
+            neues_datum.isoformat(), neue_uhrzeit, neuer_platz,
+            sp["kabine"],
+            erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_uhrzeit_aenderung(
+    spiel_id: int,
+    neue_uhrzeit: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Trainer beantragt ausschließlich eine andere Anstoßzeit."""
+    conn = db_connect()
+    row = conn.execute("SELECT * FROM spiele WHERE id=?", (spiel_id,)).fetchone()
+    conn.close()
+    if not row:
+        return -1
+    sp_cols = ["id","datum","uhrzeit","platz","heimteam","gastteam","kabine","notizen"]
+    sp = dict(zip(sp_cols, row[:len(sp_cols)]))
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,"
+        "anfrage_typ,spiel_id,neue_uhrzeit,neues_datum,neuer_platz,neue_kabine,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            sp["datum"], sp["uhrzeit"], sp["platz"],
+            sp["heimteam"], sp["gastteam"], sp["kabine"], notizen,
+            "uhrzeit_aenderung", spiel_id,
+            neue_uhrzeit, sp["datum"], sp["platz"],
+            sp["kabine"],
+            erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_verlegung_direkt(
+    datum: date,
+    uhrzeit: str,
+    platz: str,
+    heimteam: str,
+    gastteam: str,
+    neues_datum: date,
+    neue_uhrzeit: str,
+    neuer_platz: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Verlegungsantrag für ein DFBnet-Spiel ohne Systemeintrag (spiel_id = NULL)."""
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,notizen,"
+        "anfrage_typ,neues_datum,neue_uhrzeit,neuer_platz,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            datum.isoformat(), uhrzeit, platz, heimteam, gastteam, notizen,
+            "verlegung",
+            neues_datum.isoformat(), neue_uhrzeit, neuer_platz,
+            erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_uhrzeit_aenderung_direkt(
+    datum: date,
+    uhrzeit: str,
+    platz: str,
+    heimteam: str,
+    gastteam: str,
+    neue_uhrzeit: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Uhrzeitänderung für ein DFBnet-Spiel ohne Systemeintrag (spiel_id = NULL)."""
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,notizen,"
+        "anfrage_typ,neue_uhrzeit,neues_datum,neuer_platz,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            datum.isoformat(), uhrzeit, platz, heimteam, gastteam, notizen,
+            "uhrzeit_aenderung",
+            neue_uhrzeit, datum.isoformat(), platz,
+            erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_stornierung_direkt(
+    datum: date,
+    uhrzeit: str,
+    platz: str,
+    heimteam: str,
+    gastteam: str,
+    notizen: str,
+    erstellt_von: str = "",
+) -> int:
+    """Stornierungsantrag für ein DFBnet-Spiel ohne Systemeintrag (spiel_id = NULL)."""
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,heimteam,gastteam,notizen,anfrage_typ,erstellt_von) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            datum.isoformat(), uhrzeit, platz, heimteam, gastteam, notizen,
+            "stornierung", erstellt_von,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def create_anfrage_allgemein(
+    betreff: str,
+    nachricht: str,
+    erstellt_von: str = "",
+) -> int:
+    """Freie Anfrage / Rückfrage an den Spielbetrieb – kein Spielbezug nötig."""
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO spielanfragen "
+        "(datum,uhrzeit,platz,notizen,anfrage_typ,erstellt_von,betreff,nachricht) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            date.today().isoformat(), "", "",
+            nachricht, "allgemein", erstellt_von,
+            betreff, nachricht,
+        ),
+    )
+    rid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return rid
+
+
 def update_match_details(
     mid: int,
     neues_datum: date,
@@ -898,20 +1317,30 @@ def confirm_dfbnet(aid: int) -> int:
         update_anfrage_status(aid, "abgeschlossen", "Admin")
         return 0
 
-    if typ == "aenderung" and r.get("spiel_id"):
-        update_match_details(
-            int(r["spiel_id"]),
-            date.fromisoformat(r["neues_datum"]),
-            r["neue_uhrzeit"], r["neuer_platz"],
-            r.get("neue_kabine") or r.get("kabine") or "",
-            r.get("notizen") or "",
-        )
-        conn2 = db_connect()
-        conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (r["spiel_id"],))
-        conn2.commit()
-        conn2.close()
+    if typ == "allgemein":
         update_anfrage_status(aid, "abgeschlossen", "Admin")
-        return int(r["spiel_id"])
+        return 0
+
+    if typ in ("aenderung", "verlegung", "uhrzeit_aenderung"):
+        if r.get("spiel_id"):
+            # Systemeintrag vorhanden → Spiel im Dashboard aktualisieren
+            update_match_details(
+                int(r["spiel_id"]),
+                date.fromisoformat(r["neues_datum"]),
+                r["neue_uhrzeit"], r["neuer_platz"],
+                r.get("neue_kabine") or r.get("kabine") or "",
+                r.get("notizen") or "",
+            )
+            conn2 = db_connect()
+            conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (r["spiel_id"],))
+            conn2.commit()
+            conn2.close()
+            update_anfrage_status(aid, "abgeschlossen", "Admin")
+            return int(r["spiel_id"])
+        else:
+            # DFBnet-Spiel ohne Systemeintrag → nur Status abschließen
+            update_anfrage_status(aid, "abgeschlossen", "Admin")
+            return 0
 
     # typ == 'neu' (Standard)
     sid = save_match(
@@ -1250,9 +1679,12 @@ def status_badge(status: str) -> str:
 
 def typ_badge(typ: str) -> str:
     meta = {
-        "neu":         ("#3b82f6", "🆕", "Neue Ansetzung"),
-        "aenderung":   ("#f0a500", "✏️", "Änderung"),
-        "stornierung": ("#ef4444", "❌", "Stornierung"),
+        "neu":               ("#3b82f6", "🆕", "Neue Ansetzung"),
+        "aenderung":         ("#f0a500", "✏️", "Änderung"),
+        "verlegung":         ("#8b5cf6", "⏩", "Spielverlegung"),
+        "uhrzeit_aenderung": ("#0ea5e9", "⏰", "Uhrzeitänderung"),
+        "stornierung":       ("#ef4444", "❌", "Stornierung"),
+        "allgemein":         ("#10b981", "💬", "Freie Anfrage"),
     }
     farbe, icon, label = meta.get(typ, ("#888", "?", typ))
     return (
@@ -1276,7 +1708,8 @@ def page_trainingsplan_view() -> None:
     # Automatisch aus DB laden falls noch nichts im Session-State
     df_training = st.session_state.get("training_df", pd.DataFrame())
     if df_training.empty:
-        saison_key  = f"{date.today().year}/{date.today().year + 1}"
+        _ty, _tm = date.today().year, date.today().month
+        saison_key  = f"{_ty - 1}/{_ty}" if _tm < 7 else f"{_ty}/{_ty + 1}"
         df_training = load_training_df_from_db(
             st.session_state.get("aktuell_saison", saison_key)
         )
@@ -1346,177 +1779,447 @@ def page_trainingsplan_view() -> None:
 def page_user_anfrage() -> None:
     my_team = st.session_state.get("team", "")
     st.markdown(
-        '<div class="main-header"><h1>📨 Spielanfragen stellen</h1>'
+        '<div class="main-header"><h1>📨 Meine Anfragen</h1>'
         f'<p>Mannschaft: <strong>{my_team}</strong> · '
-        'Neue Ansetzung anfragen · Änderung beantragen · Stornierung beantragen</p></div>',
+        'Neues Spiel anfragen &nbsp;·&nbsp; Spielverlegung &nbsp;·&nbsp; Uhrzeitänderung &nbsp;·&nbsp; Stornierung &nbsp;·&nbsp; Freie Anfrage an den Spielbetrieb</p></div>',
         unsafe_allow_html=True,
     )
 
     df_training = st.session_state.get("training_df", pd.DataFrame())
-    alle_spiele = get_all_matches()
+    alle_spiele  = get_all_matches()
+    eigene = alle_spiele[alle_spiele["heimteam"] == my_team] \
+             if (my_team and not alle_spiele.empty) else alle_spiele
 
-    tab_neu, tab_aend, tab_storni, tab_meine = st.tabs([
+    tab_neu, tab_verl, tab_uhr, tab_storni, tab_frei, tab_meine = st.tabs([
         "🆕 Neues Spiel",
-        "✏️ Änderung beantragen",
-        "❌ Stornierung beantragen",
+        "⏩ Spielverlegung",
+        "⏰ Uhrzeitänderung",
+        "❌ Stornierung",
+        "💬 Freie Anfrage",
         "📋 Meine Anfragen",
     ])
 
     # ── Tab: Neues Spiel ─────────────────────────────────────────────────────
     with tab_neu:
-        with st.form("anfrage_form"):
-            st.subheader("Neue Spielanfrage")
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                f_datum   = st.date_input("Datum", value=date.today())
-            with fc2:
-                f_uhrzeit = st.selectbox("Anstoßzeit", TIME_SLOTS_TRAINING)
-            f_platz = st.selectbox("Platz", PITCHES_SPIEL)
-            fc3, fc4 = st.columns(2)
-            with fc3:
-                # Heimteam ist gesperrt – aus dem Login vorbelegt
-                f_heim = st.text_input(
-                    "Heimteam", value=my_team, disabled=bool(my_team),
-                    help="Wird automatisch aus deiner Mannschaft übernommen.",
-                )
-            with fc4:
-                f_gast = st.text_input("Gastteam", placeholder="z. B. FC Muster")
-            st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
-            f_notizen = st.text_area("Notizen / Anmerkungen")
-            conflicts = find_conflicts(df_training, f_datum, f_uhrzeit, f_platz)
-            if conflicts:
-                st.warning(
-                    f"⚠️ **{', '.join(conflicts)}** trainieren zu diesem Zeitpunkt. "
-                    "Der Admin prüft die Zustimmung."
-                )
-            if st.form_submit_button("📨 Anfrage absenden", type="primary", use_container_width=True):
-                heim_val = my_team or f_heim.strip()
-                if not heim_val or not f_gast.strip():
-                    st.error("Bitte Heim- und Gastteam eintragen.")
-                else:
-                    rid = create_spielanfrage(
-                        f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
-                        kabine="", notizen=f_notizen, erstellt_von=my_team,
-                    )
-                    st.success(f"✅ Anfrage #{rid} eingereicht!")
-                    html = _mail_anfrage_html(
-                        rid, f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
-                        "", f_notizen, conflicts, typ="Neue Spielanfrage",
-                    )
-                    ok, err = send_email(
-                        f"[FCTM] Neue Spielanfrage #{rid}: {heim_val} vs {f_gast.strip()} "
-                        f"({f_datum.strftime('%d.%m.%Y')})", html,
-                    )
-                    if ok:
-                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
-                    elif err != "E-Mail-Versand nicht aktiviert.":
-                        st.warning(f"📧 {err}")
-
-    # ── Tab: Änderung ────────────────────────────────────────────────────────
-    with tab_aend:
-        # Nur eigene Heimspiele anzeigen
-        eigene_aend = alle_spiele[alle_spiele["heimteam"] == my_team] \
-                      if (my_team and not alle_spiele.empty) else alle_spiele
-        if eigene_aend.empty:
-            st.info(
-                f"Keine bestätigten Heimspiele für **{my_team}** gefunden."
-                if my_team else "Noch keine bestätigten Spiele vorhanden."
+        st.subheader("Neue Spielanfrage")
+        st.caption("Beantrage einen noch nicht angesetzten Spieltermin. Der Spielbetrieb prüft die Verfügbarkeit und trägt das Spiel nach Genehmigung ins DFBnet ein.")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            f_datum   = st.date_input("Datum", value=date.today(), key="anf_datum")
+        with fc2:
+            f_uhrzeit = st.selectbox("Anstoßzeit", TIME_SLOTS_TRAINING, key="anf_uhrzeit")
+        f_platz = st.selectbox("Platz", PITCHES_SPIEL, key="anf_platz")
+        fc3, fc4 = st.columns(2)
+        with fc3:
+            f_heim = st.text_input(
+                "Heimteam", value=my_team, disabled=bool(my_team),
+                key="anf_heim",
+                help="Wird automatisch aus deiner Mannschaft übernommen.",
             )
-        else:
-            with st.form("aender_form"):
-                st.subheader("Spieländerung beantragen")
-                spiel_opts = {
-                    f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
-                    f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
-                    for _, m in eigene_aend.sort_values("datum").iterrows()
-                }
-                sel_label = st.selectbox("Betroffenes Spiel", list(spiel_opts.keys()))
-                sel_id    = spiel_opts[sel_label]
-                sel_match = eigene_aend[eigene_aend["id"] == sel_id].iloc[0]
-                st.markdown(
-                    f"**Aktuell:** {sel_match['datum']} {sel_match['uhrzeit']} · "
-                    f"{sel_match['platz']}"
+        with fc4:
+            f_gast = st.text_input("Gastteam", placeholder="z. B. FC Muster", key="anf_gast")
+        st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
+        f_notizen = st.text_area("Notizen / Anmerkungen", key="anf_notizen")
+
+        # ── Konflikt-Check (live, außerhalb des Formulars) ───────────────────
+        conflicts = find_conflicts(df_training, f_datum, f_uhrzeit, f_platz)
+        other_conflicts = [t for t in conflicts if t != my_team]
+        if my_team and my_team in conflicts:
+            st.info(
+                f"ℹ️ **{my_team}** hat zu diesem Zeitpunkt selbst Training auf dem Platz."
+            )
+        konflikt_bestaetigt = True
+        if other_conflicts:
+            st.warning(
+                f"⚠️ **{', '.join(other_conflicts)}** "
+                f"{'trainiert' if len(other_conflicts) == 1 else 'trainieren'} "
+                "zu diesem Zeitpunkt auf dem Platz. "
+                "**Bitte stimme dich vorher mit den betroffenen Trainern ab.**"
+            )
+            konflikt_bestaetigt = st.checkbox(
+                f"✅ Ich bestätige, dass ich mit allen betroffenen Trainern "
+                f"({', '.join(other_conflicts)}) gesprochen habe und diese zugestimmt haben.",
+                key="anf_konflikt_ok",
+            )
+
+        # ── Absenden ─────────────────────────────────────────────────────────
+        if st.button("📨 Anfrage absenden", type="primary",
+                     use_container_width=True, disabled=not konflikt_bestaetigt):
+            heim_val = my_team or f_heim.strip()
+            if not heim_val or not f_gast.strip():
+                st.error("Bitte Heim- und Gastteam eintragen.")
+            else:
+                rid = create_spielanfrage(
+                    f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
+                    kabine="", notizen=f_notizen, erstellt_von=my_team,
                 )
-                st.divider()
-                st.markdown("**Gewünschte neue Daten:**")
-                ac1, ac2 = st.columns(2)
-                with ac1:
-                    a_datum = st.date_input(
-                        "Neues Datum", value=date.fromisoformat(sel_match["datum"])
-                    )
-                with ac2:
-                    cur_idx = TIME_SLOTS_TRAINING.index(sel_match["uhrzeit"]) \
-                              if sel_match["uhrzeit"] in TIME_SLOTS_TRAINING else 0
-                    a_uhrzeit = st.selectbox("Neue Uhrzeit", TIME_SLOTS_TRAINING, index=cur_idx)
-                cur_platz_idx = PITCHES_SPIEL.index(sel_match["platz"]) \
-                                if sel_match["platz"] in PITCHES_SPIEL else 0
-                a_platz = st.selectbox("Neuer Platz", PITCHES_SPIEL, index=cur_platz_idx)
-                st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
-                a_notizen = st.text_area("Begründung / Anmerkungen")
-                if st.form_submit_button("✏️ Änderung beantragen", type="primary", use_container_width=True):
-                    rid = create_anfrage_aenderung(
-                        sel_id, a_datum, a_uhrzeit, a_platz, a_notizen, erstellt_von=my_team,
-                    )
-                    st.success(f"✅ Änderungsantrag #{rid} eingereicht!")
+                st.success(f"✅ Anfrage #{rid} eingereicht!")
+                html = _mail_anfrage_html(
+                    rid, f_datum, f_uhrzeit, f_platz, heim_val, f_gast.strip(),
+                    "", f_notizen, other_conflicts, typ="Neue Spielanfrage",
+                )
+                ok, err = send_email(
+                    f"[FCTM] Neue Spielanfrage #{rid}: {heim_val} vs {f_gast.strip()} "
+                    f"({f_datum.strftime('%d.%m.%Y')})", html,
+                )
+                if ok:
+                    st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                elif err != "E-Mail-Versand nicht aktiviert.":
+                    st.warning(f"📧 {err}")
+
+    # ── Tab: Spielverlegung ──────────────────────────────────────────────────
+    with tab_verl:
+        st.subheader("Spielverlegung beantragen")
+        st.caption(
+            "Beantrage einen neuen Termin für ein Spiel – egal ob es im System angelegt ist "
+            "oder nur im DFBnet steht."
+        )
+
+        if not eigene.empty:
+            verl_modus = st.radio(
+                "Spiel auswählen",
+                ["📋 Systemspiel auswählen", "✏️ DFBnet-Spiel manuell eingeben"],
+                horizontal=True, key="verl_modus",
+                help="'Systemspiel' wenn das Spiel hier bereits angelegt ist. "
+                     "Für alle anderen DFBnet-Ansetzungen: 'Manuell eingeben'.",
+            )
+            aus_system_verl = verl_modus.startswith("📋")
+        else:
+            aus_system_verl = False
+
+        if aus_system_verl:
+            # ── Systemspiel ──────────────────────────────────────────────────────────────────
+            verl_opts = {
+                f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
+                f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
+                for _, m in eigene.sort_values("datum").iterrows()
+            }
+            v_label = st.selectbox("Betroffenes Spiel", list(verl_opts.keys()), key="verl_spiel")
+            v_id    = verl_opts[v_label]
+            v_match = eigene[eigene["id"] == v_id].iloc[0]
+            st.markdown(
+                f'<div style="background:#f5f3ff;border-left:4px solid #8b5cf6;'
+                f'border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">'
+                f'<b>Aktueller Termin:</b> 📅 {pd.to_datetime(v_match["datum"]).strftime("%d.%m.%Y")}'
+                f' &nbsp;| &nbsp; ⏰ {v_match["uhrzeit"]} &nbsp;| &nbsp; 🏟️ {v_match["platz"]}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("**Gewünschter neuer Termin:**")
+            vc1, vc2 = st.columns(2)
+            with vc1:
+                v_datum = st.date_input("Neues Datum *", value=date.fromisoformat(v_match["datum"]), key="verl_datum")
+            with vc2:
+                cur_idx_v = TIME_SLOTS_TRAINING.index(v_match["uhrzeit"]) if v_match["uhrzeit"] in TIME_SLOTS_TRAINING else 0
+                v_uhrzeit = st.selectbox("Neue Anstoßzeit", TIME_SLOTS_TRAINING, index=cur_idx_v, key="verl_uhrzeit")
+            cur_platz_idx_v = PITCHES_SPIEL.index(v_match["platz"]) if v_match["platz"] in PITCHES_SPIEL else 0
+            v_platz = st.selectbox("Neuer Platz", PITCHES_SPIEL, index=cur_platz_idx_v, key="verl_platz")
+            st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
+            v_notizen = st.text_area("Begründung (Pflicht) *", key="verl_notizen",
+                                     placeholder="z. B. Platzverfügbarkeit, Absprache mit Gegner …")
+            if st.button("⏩ Verlegung beantragen", type="primary", use_container_width=True, key="verl_btn"):
+                if not v_notizen.strip():
+                    st.error("Bitte eine Begründung angeben.")
+                elif v_datum == date.fromisoformat(v_match["datum"]) and v_uhrzeit == v_match["uhrzeit"] and v_platz == v_match["platz"]:
+                    st.warning("Keine Änderung erkannt – bitte neues Datum, Uhrzeit oder Platz wählen.")
+                else:
+                    rid = create_anfrage_verlegung(v_id, v_datum, v_uhrzeit, v_platz, v_notizen.strip(), erstellt_von=my_team)
+                    st.success(f"✅ Verlegungsantrag #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ✏️ Änderungsantrag #{rid}: {sel_match['heimteam']} vs "
-                        f"{sel_match['gastteam']}",
-                        _mail_anfrage_html(
-                            rid, date.fromisoformat(sel_match["datum"]),
-                            sel_match["uhrzeit"], sel_match["platz"],
-                            sel_match["heimteam"], sel_match["gastteam"],
-                            "", a_notizen,
-                            [], typ=f"Änderungsantrag → {a_datum.strftime('%d.%m.%Y')} {a_uhrzeit}",
-                        ),
+                        f"[FCTM] ⏩ Spielverlegung #{rid}: {v_match['heimteam']} vs {v_match['gastteam']} → {v_datum.strftime('%d.%m.%Y')} {v_uhrzeit}",
+                        _mail_anfrage_html(rid, date.fromisoformat(v_match["datum"]), v_match["uhrzeit"], v_match["platz"],
+                                           v_match["heimteam"], v_match["gastteam"], "", v_notizen, [],
+                                           typ=f"Spielverlegung → {v_datum.strftime('%d.%m.%Y')} {v_uhrzeit} · {v_platz}"),
                     )
-                    if ok:
-                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
-                    elif err != "E-Mail-Versand nicht aktiviert.":
-                        st.warning(f"📧 {err}")
+                    if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
+        else:
+            # ── DFBnet-Spiel manuell ─────────────────────────────────────────────────────────────
+            st.markdown(
+                '<div style="background:#f5f3ff;border-left:4px solid #8b5cf6;border-radius:6px;'
+                'padding:10px 14px;margin-bottom:10px;font-size:13px;">'
+                '✏️ Trage die aktuellen Spieldaten aus dem DFBnet ein und gib den gewünschten neuen Termin an.</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("**Aktueller Termin (laut DFBnet):**")
+            vd1, vd2 = st.columns(2)
+            with vd1:
+                vd_gast   = st.text_input("Gastteam *", placeholder="z. B. FC Muster", key="verl_d_gast")
+                vd_datum  = st.date_input("Aktuelles Datum *", value=date.today(), key="verl_d_datum")
+            with vd2:
+                vd_uhrzeit = st.selectbox("Aktuelle Anstoßzeit", TIME_SLOTS_TRAINING, key="verl_d_uhrzeit")
+                vd_platz   = st.selectbox("Aktueller Platz", PITCHES_SPIEL, key="verl_d_platz")
+            st.divider()
+            st.markdown("**Gewünschter neuer Termin:**")
+            vn1, vn2 = st.columns(2)
+            with vn1:
+                vd_n_datum   = st.date_input("Neues Datum *", value=date.today() + timedelta(days=7), key="verl_nd_datum")
+            with vn2:
+                vd_n_uhrzeit = st.selectbox("Neue Anstoßzeit", TIME_SLOTS_TRAINING, key="verl_nd_uhrzeit")
+            vd_n_platz = st.selectbox("Neuer Platz", PITCHES_SPIEL, key="verl_nd_platz")
+            st.info("🚿 Kabinenzuweisung erfolgt durch den Admin nach der Genehmigung.")
+            vd_notizen = st.text_area("Begründung (Pflicht) *", key="verl_d_notizen",
+                                      placeholder="z. B. Platzverfügbarkeit, Absprache mit Gegner …")
+            if st.button("⏩ Verlegung beantragen", type="primary", use_container_width=True, key="verl_d_btn"):
+                if not vd_gast.strip():
+                    st.error("Bitte den Gastverein eintragen.")
+                elif not vd_notizen.strip():
+                    st.error("Bitte eine Begründung angeben.")
+                elif vd_datum == vd_n_datum and vd_uhrzeit == vd_n_uhrzeit and vd_platz == vd_n_platz:
+                    st.warning("Keine Änderung erkannt – bitte neuen Termin wählen.")
+                else:
+                    heim_val = my_team or "Unbekannt"
+                    rid = create_anfrage_verlegung_direkt(
+                        vd_datum, vd_uhrzeit, vd_platz, heim_val, vd_gast.strip(),
+                        vd_n_datum, vd_n_uhrzeit, vd_n_platz, vd_notizen.strip(), erstellt_von=my_team,
+                    )
+                    st.success(f"✅ Verlegungsantrag #{rid} eingereicht!")
+                    ok, err = send_email(
+                        f"[FCTM] ⏩ Spielverlegung #{rid}: {heim_val} vs {vd_gast.strip()} → {vd_n_datum.strftime('%d.%m.%Y')} {vd_n_uhrzeit}",
+                        _mail_anfrage_html(rid, vd_datum, vd_uhrzeit, vd_platz, heim_val, vd_gast.strip(), "", vd_notizen, [],
+                                           typ=f"Spielverlegung → {vd_n_datum.strftime('%d.%m.%Y')} {vd_n_uhrzeit} · {vd_n_platz}"),
+                    )
+                    if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
+
+    # ── Tab: Uhrzeitänderung ─────────────────────────────────────────────────
+    with tab_uhr:
+        st.subheader("Anstoßzeit ändern")
+        st.caption(
+            "Beantrage ausschließlich eine andere Anstoßzeit – Datum und Platz bleiben unverändert. "
+            "Gilt für Systemspiele und DFBnet-Ansetzungen."
+        )
+
+        if not eigene.empty:
+            uhr_modus = st.radio(
+                "Spiel auswählen",
+                ["📋 Systemspiel auswählen", "✏️ DFBnet-Spiel manuell eingeben"],
+                horizontal=True, key="uhr_modus",
+                help="'Systemspiel' wenn das Spiel hier bereits angelegt ist. "
+                     "Für alle anderen DFBnet-Ansetzungen: 'Manuell eingeben'.",
+            )
+            aus_system_uhr = uhr_modus.startswith("📋")
+        else:
+            aus_system_uhr = False
+
+        if aus_system_uhr:
+            uhr_opts = {
+                f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
+                f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
+                for _, m in eigene.sort_values("datum").iterrows()
+            }
+            u_label = st.selectbox("Betroffenes Spiel", list(uhr_opts.keys()), key="uhr_spiel")
+            u_id    = uhr_opts[u_label]
+            u_match = eigene[eigene["id"] == u_id].iloc[0]
+            st.markdown(
+                f'<div style="background:#f0f9ff;border-left:4px solid #0ea5e9;'
+                f'border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">'
+                f'<b>Aktueller Termin:</b> 📅 {pd.to_datetime(u_match["datum"]).strftime("%d.%m.%Y")}'
+                f' &nbsp;|\u200a&nbsp; ⏰ <b>{u_match["uhrzeit"]}</b> &nbsp;|\u200a&nbsp; 🏟️ {u_match["platz"]}</div>',
+                unsafe_allow_html=True,
+            )
+            cur_idx_u = TIME_SLOTS_TRAINING.index(u_match["uhrzeit"]) if u_match["uhrzeit"] in TIME_SLOTS_TRAINING else 0
+            u_neue_uhrzeit = st.selectbox("⏰ Neue Anstoßzeit *", TIME_SLOTS_TRAINING, index=cur_idx_u, key="uhr_neue_uhrzeit")
+            u_notizen = st.text_area("Begründung (Pflicht) *", key="uhr_notizen",
+                                     placeholder="z. B. Absprache mit Gastverein, Schiedsrichtertermin …")
+            if st.button("⏰ Uhrzeitänderung beantragen", type="primary", use_container_width=True, key="uhr_btn"):
+                if not u_notizen.strip():
+                    st.error("Bitte eine Begründung angeben.")
+                elif u_neue_uhrzeit == u_match["uhrzeit"]:
+                    st.warning("Die gewählte Uhrzeit ist identisch mit der aktuellen Anstoßzeit.")
+                else:
+                    rid = create_anfrage_uhrzeit_aenderung(u_id, u_neue_uhrzeit, u_notizen.strip(), erstellt_von=my_team)
+                    st.success(f"✅ Uhrzeitänderung #{rid} eingereicht!")
+                    ok, err = send_email(
+                        f"[FCTM] ⏰ Uhrzeitänderung #{rid}: {u_match['heimteam']} vs {u_match['gastteam']} – {u_match['uhrzeit']} → {u_neue_uhrzeit}",
+                        _mail_anfrage_html(rid, date.fromisoformat(u_match["datum"]), u_match["uhrzeit"], u_match["platz"],
+                                           u_match["heimteam"], u_match["gastteam"], "", u_notizen, [],
+                                           typ=f"Uhrzeitänderung: {u_match['uhrzeit']} → {u_neue_uhrzeit}"),
+                    )
+                    if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
+        else:
+            st.markdown(
+                '<div style="background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:6px;'
+                'padding:10px 14px;margin-bottom:10px;font-size:13px;">'
+                '✏️ Trage die aktuellen Spieldaten aus dem DFBnet ein und gib die gewünschte neue Anstoßzeit an.</div>',
+                unsafe_allow_html=True,
+            )
+            ud1, ud2 = st.columns(2)
+            with ud1:
+                ud_gast    = st.text_input("Gastteam *", placeholder="z. B. FC Muster", key="uhr_d_gast")
+                ud_datum   = st.date_input("Datum des Spiels *", value=date.today(), key="uhr_d_datum")
+            with ud2:
+                ud_uhrzeit = st.selectbox("Aktuelle Anstoßzeit", TIME_SLOTS_TRAINING, key="uhr_d_uhrzeit")
+                ud_platz   = st.selectbox("Platz", PITCHES_SPIEL, key="uhr_d_platz")
+            ud_neue_uhrzeit = st.selectbox("⏰ Neue Anstoßzeit *", TIME_SLOTS_TRAINING, key="uhr_d_neue_uhrzeit")
+            ud_notizen = st.text_area("Begründung (Pflicht) *", key="uhr_d_notizen",
+                                      placeholder="z. B. Absprache mit Gastverein, Schiedsrichtertermin …")
+            if st.button("⏰ Uhrzeitänderung beantragen", type="primary", use_container_width=True, key="uhr_d_btn"):
+                if not ud_gast.strip():
+                    st.error("Bitte den Gastverein eintragen.")
+                elif not ud_notizen.strip():
+                    st.error("Bitte eine Begründung angeben.")
+                elif ud_neue_uhrzeit == ud_uhrzeit:
+                    st.warning("Die gewählte Uhrzeit ist identisch mit der aktuellen Anstoßzeit.")
+                else:
+                    heim_val = my_team or "Unbekannt"
+                    rid = create_anfrage_uhrzeit_aenderung_direkt(
+                        ud_datum, ud_uhrzeit, ud_platz, heim_val, ud_gast.strip(),
+                        ud_neue_uhrzeit, ud_notizen.strip(), erstellt_von=my_team,
+                    )
+                    st.success(f"✅ Uhrzeitänderung #{rid} eingereicht!")
+                    ok, err = send_email(
+                        f"[FCTM] ⏰ Uhrzeitänderung #{rid}: {heim_val} vs {ud_gast.strip()} – {ud_uhrzeit} → {ud_neue_uhrzeit}",
+                        _mail_anfrage_html(rid, ud_datum, ud_uhrzeit, ud_platz, heim_val, ud_gast.strip(), "", ud_notizen, [],
+                                           typ=f"Uhrzeitänderung: {ud_uhrzeit} → {ud_neue_uhrzeit}"),
+                    )
+                    if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
 
     # ── Tab: Stornierung ─────────────────────────────────────────────────────
     with tab_storni:
-        eigene_storni = alle_spiele[alle_spiele["heimteam"] == my_team] \
-                        if (my_team and not alle_spiele.empty) else alle_spiele
-        if eigene_storni.empty:
-            st.info(
-                f"Keine bestätigten Heimspiele für **{my_team}** gefunden."
-                if my_team else "Noch keine bestätigten Spiele vorhanden."
+        st.subheader("Spielstornierung beantragen")
+        st.caption(
+            "Beantrage die Absage eines Spiels. Gilt für Systemspiele und für DFBnet-Ansetzungen, "
+            "die nicht im System erfasst sind."
+        )
+
+        if not eigene.empty:
+            storni_modus = st.radio(
+                "Spiel auswählen",
+                ["📋 Systemspiel auswählen", "✏️ DFBnet-Spiel manuell eingeben"],
+                horizontal=True, key="storni_modus",
+                help="'Systemspiel' wenn das Spiel hier bereits angelegt ist. "
+                     "Für alle anderen DFBnet-Ansetzungen: 'Manuell eingeben'.",
             )
+            aus_system_storni = storni_modus.startswith("📋")
         else:
+            aus_system_storni = False
+
+        if aus_system_storni:
+            storni_opts = {
+                f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
+                f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
+                for _, m in eigene.sort_values("datum").iterrows()
+            }
             with st.form("storni_form"):
-                st.subheader("Spielstornierung beantragen")
-                storni_opts = {
-                    f"#{m['id']} – {m['heimteam']} vs {m['gastteam']} "
-                    f"({pd.to_datetime(m['datum']).strftime('%d.%m.%Y')} {m['uhrzeit']})": m["id"]
-                    for _, m in eigene_storni.sort_values("datum").iterrows()
-                }
-                s_label = st.selectbox("Zu storrierendes Spiel", list(storni_opts.keys()))
+                s_label = st.selectbox("Zu stornierendes Spiel", list(storni_opts.keys()))
                 s_id    = storni_opts[s_label]
-                s_match = eigene_storni[eigene_storni["id"] == s_id].iloc[0]
+                s_match = eigene[eigene["id"] == s_id].iloc[0]
                 st.markdown(
-                    f"**Spiel:** {s_match['heimteam']} vs {s_match['gastteam']} · "
-                    f"{s_match['datum']} {s_match['uhrzeit']} · {s_match['platz']}"
+                    f'<div style="background:#fff5f5;border-left:4px solid #ef4444;'
+                    f'border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">'
+                    f'<b>Spiel:</b> {s_match["heimteam"]} vs {s_match["gastteam"]} &nbsp;|\u200a&nbsp; '
+                    f'📅 {s_match["datum"]} &nbsp;|\u200a&nbsp; ⏰ {s_match["uhrzeit"]} &nbsp;|\u200a&nbsp; '
+                    f'🏟️ {s_match["platz"]}</div>',
+                    unsafe_allow_html=True,
                 )
-                s_notizen = st.text_area("Begründung / Anmerkungen")
+                s_notizen = st.text_area("Begründung (Pflicht) *",
+                                         placeholder="z. B. Platzsperre, Terminkollision, Absage des Gegners …")
                 if st.form_submit_button("❌ Stornierung beantragen", type="secondary", use_container_width=True):
-                    rid = create_anfrage_stornierung(s_id, s_notizen, erstellt_von=my_team)
+                    if not s_notizen.strip():
+                        st.error("Bitte eine Begründung angeben.")
+                    else:
+                        rid = create_anfrage_stornierung(s_id, s_notizen, erstellt_von=my_team)
+                        st.success(f"✅ Stornierungsantrag #{rid} eingereicht!")
+                        ok, err = send_email(
+                            f"[FCTM] ❌ Stornierungsantrag #{rid}: {s_match['heimteam']} vs {s_match['gastteam']} ({s_match['datum']})",
+                            _mail_anfrage_html(rid, date.fromisoformat(s_match["datum"]), s_match["uhrzeit"], s_match["platz"],
+                                               s_match["heimteam"], s_match["gastteam"], "", s_notizen, [], typ="Stornierungsantrag"),
+                        )
+                        if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                        elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
+        else:
+            st.markdown(
+                '<div style="background:#fff5f5;border-left:4px solid #ef4444;border-radius:6px;'
+                'padding:10px 14px;margin-bottom:10px;font-size:13px;">'
+                '✏️ Trage die Spieldaten aus dem DFBnet ein, das du stornieren möchtest.</div>',
+                unsafe_allow_html=True,
+            )
+            sd1, sd2 = st.columns(2)
+            with sd1:
+                sd_gast    = st.text_input("Gastteam *", placeholder="z. B. FC Muster", key="storni_d_gast")
+                sd_datum   = st.date_input("Datum des Spiels *", value=date.today(), key="storni_d_datum")
+            with sd2:
+                sd_uhrzeit = st.selectbox("Anstoßzeit", TIME_SLOTS_TRAINING, key="storni_d_uhrzeit")
+                sd_platz   = st.selectbox("Platz", PITCHES_SPIEL, key="storni_d_platz")
+            sd_notizen = st.text_area("Begründung (Pflicht) *", key="storni_d_notizen",
+                                      placeholder="z. B. Platzsperre, Terminkollision, Absage des Gegners …")
+            if st.button("❌ Stornierung beantragen", type="secondary", use_container_width=True, key="storni_d_btn"):
+                if not sd_gast.strip():
+                    st.error("Bitte den Gastverein eintragen.")
+                elif not sd_notizen.strip():
+                    st.error("Bitte eine Begründung angeben.")
+                else:
+                    heim_val = my_team or "Unbekannt"
+                    rid = create_anfrage_stornierung_direkt(
+                        sd_datum, sd_uhrzeit, sd_platz, heim_val, sd_gast.strip(),
+                        sd_notizen.strip(), erstellt_von=my_team,
+                    )
                     st.success(f"✅ Stornierungsantrag #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ❌ Stornierungsantrag #{rid}: {s_match['heimteam']} vs "
-                        f"{s_match['gastteam']} ({s_match['datum']})",
-                        _mail_anfrage_html(
-                            rid, date.fromisoformat(s_match["datum"]),
-                            s_match["uhrzeit"], s_match["platz"],
-                            s_match["heimteam"], s_match["gastteam"],
-                            "", s_notizen,
-                            [], typ="Stornierungsantrag",
-                        ),
+                        f"[FCTM] ❌ Stornierungsantrag #{rid}: {heim_val} vs {sd_gast.strip()} ({sd_datum.strftime('%d.%m.%Y')})",
+                        _mail_anfrage_html(rid, sd_datum, sd_uhrzeit, sd_platz, heim_val, sd_gast.strip(), "", sd_notizen, [], typ="Stornierungsantrag"),
                     )
-                    if ok:
-                        st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
-                    elif err != "E-Mail-Versand nicht aktiviert.":
-                        st.warning(f"📧 {err}")
+                    if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                    elif err != "E-Mail-Versand nicht aktiviert.": st.warning(f"📧 {err}")
+
+    # ── Tab: Freie Anfrage ───────────────────────────────────────────────────
+    with tab_frei:
+        st.subheader("Freie Anfrage an den Spielbetrieb")
+        st.caption(
+            "Hast du eine Frage, einen Hinweis oder ein Anliegen, das nicht in die anderen "
+            "Kategorien passt? Schreib hier direkt an den Spielbetrieb."
+        )
+        st.markdown(
+            '<div style="background:#f0fdf4;border-left:4px solid #10b981;'
+            'border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:13px;">'
+            '💬 Diese Anfrage wird direkt ans Funktionspostfach des Spielbetriebs gesendet '
+            'und in deiner Anfrageübersicht gespeichert.</div>',
+            unsafe_allow_html=True,
+        )
+        f_betreff   = st.text_input(
+            "Betreff *", placeholder="z. B. Frage zur Schiedsrichter-Ansetzung",
+            key="frei_betreff",
+        )
+        f_nachricht = st.text_area(
+            "Nachricht *", height=160,
+            placeholder="Beschreibe dein Anliegen so genau wie möglich …",
+            key="frei_nachricht",
+        )
+        if st.button("💬 Anfrage senden", type="primary",
+                     use_container_width=True, key="frei_btn"):
+            if not f_betreff.strip():
+                st.error("Bitte einen Betreff angeben.")
+            elif not f_nachricht.strip():
+                st.error("Bitte eine Nachricht eingeben.")
+            else:
+                rid = create_anfrage_allgemein(
+                    f_betreff.strip(), f_nachricht.strip(), erstellt_von=my_team,
+                )
+                st.success(f"✅ Anfrage #{rid} wurde an den Spielbetrieb gesendet!")
+                mail_html = f"""
+                <html><body style='font-family:Arial,sans-serif;'>
+                <div style='background:#f0fdf4;border-top:5px solid #10b981;padding:24px 30px;'>
+                <h2 style='color:#065f46;'>💬 Freie Anfrage #{rid}</h2>
+                <table style='font-size:14px;color:#1a1a1a;'>
+                <tr><td style='padding:4px 12px 4px 0;color:#6b7280;'>Von:</td>
+                    <td><b>{my_team}</b></td></tr>
+                <tr><td style='padding:4px 12px 4px 0;color:#6b7280;'>Betreff:</td>
+                    <td><b>{f_betreff.strip()}</b></td></tr>
+                </table>
+                <hr style='border:none;border-top:1px solid #d1fae5;margin:14px 0;'/>
+                <p style='white-space:pre-wrap;font-size:14px;'>{f_nachricht.strip()}</p>
+                </div></body></html>
+                """
+                ok, err = send_email(
+                    f"[FCTM] 💬 Freie Anfrage #{rid} von {my_team}: {f_betreff.strip()}",
+                    mail_html,
+                )
+                if ok:
+                    st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
+                elif err != "E-Mail-Versand nicht aktiviert.":
+                    st.warning(f"📧 {err}")
 
     # ── Tab: Meine Anfragen ──────────────────────────────────────────────────
     with tab_meine:
@@ -1535,19 +2238,45 @@ def page_user_anfrage() -> None:
         else:
             for _, r in meine_anf.sort_values("erstellt_am", ascending=False).iterrows():
                 t = r.get("anfrage_typ") or "neu"
-                kabine_info = f' &nbsp;|&nbsp; 🚿 {r["kabine"]}' if r.get("kabine") else \
-                              ' &nbsp;|&nbsp; <em style="color:#666;">Kabine: wird vom Admin vergeben</em>'
+                is_allgemein = (t == "allgemein")
+                kabine_info = (
+                    f' &nbsp;|&nbsp; 🚿 {r["kabine"]}' if r.get("kabine") else
+                    ' &nbsp;|&nbsp; <em style="color:#888;">Kabine: wird vom Admin vergeben</em>'
+                )
+                if is_allgemein:
+                    titel  = r.get("betreff") or r.get("notizen") or "Freie Anfrage"
+                    excerpt = (r.get("nachricht") or r.get("notizen") or "")[:100]
+                    detail = (
+                        f'<div style="color:#555;font-size:12px;margin-top:6px;">'
+                        f'💬 {excerpt}{"…" if len(excerpt) == 100 else ""}</div>'
+                    )
+                else:
+                    titel = f'⚽ {r["heimteam"]} vs {r["gastteam"]}'
+                    change_hint = ""
+                    if t in ("aenderung", "verlegung") and r.get("neues_datum"):
+                        change_hint = (
+                            f' <span style="color:#8b5cf6;font-weight:bold;">→ '
+                            f'{r["neues_datum"]} {r.get("neue_uhrzeit","")}</span>'
+                        )
+                    elif t == "uhrzeit_aenderung" and r.get("neue_uhrzeit"):
+                        change_hint = (
+                            f' <span style="color:#0ea5e9;font-weight:bold;">→ '
+                            f'{r.get("neue_uhrzeit","")}</span>'
+                        )
+                    detail = (
+                        f'<div style="color:#888;font-size:12px;margin-top:6px;">'
+                        f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]}'
+                        f'{change_hint}'
+                        f' &nbsp;|&nbsp; 🏟️ {r["platz"]}'
+                        f'{kabine_info}</div>'
+                    )
                 st.markdown(
                     f'<div class="anfrage-card">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                    f'<span style="color:#f0f0f0;font-weight:bold;">'
-                    f'⚽ {r["heimteam"]} vs {r["gastteam"]}</span>'
+                    f'<span style="color:#1a1a1a;font-weight:bold;">{titel}</span>'
                     f'<span>{typ_badge(t)}&nbsp;{status_badge(r["status"])}</span></div>'
-                    f'<div style="color:#aaa;font-size:12px;margin-top:6px;">'
-                    f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]}'
-                    + (f' → {r["neues_datum"]} {r["neue_uhrzeit"]}' if t == "aenderung" and r.get("neues_datum") else "")
-                    + f' &nbsp;|&nbsp; 🏟️ {r["platz"]}{kabine_info}</div>'
-                    f"</div>",
+                    + detail +
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -1563,6 +2292,80 @@ def page_admin_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Aktions-Karten (offene Posten) ────────────────────────────────────────
+    alle_anf = get_all_anfragen()
+    n_neu  = len(alle_anf[alle_anf["status"] == "ausstehend"])       if not alle_anf.empty else 0
+    n_dfb  = len(alle_anf[alle_anf["status"] == "dfbnet_ausstehend"]) if not alle_anf.empty else 0
+
+    # Aufschlüsselung für die Karte: wie viele davon sind freie Anfragen?
+    if not alle_anf.empty and n_neu > 0:
+        _offen       = alle_anf[alle_anf["status"] == "ausstehend"]
+        n_neu_frei   = len(_offen[_offen["anfrage_typ"] == "allgemein"]) \
+                       if "anfrage_typ" in _offen.columns else 0
+        n_neu_spiele = n_neu - n_neu_frei
+    else:
+        n_neu_frei = n_neu_spiele = 0
+
+    if n_neu > 0 or n_dfb > 0:
+        karten_html = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;">'
+        if n_neu_spiele > 0:
+            karten_html += (
+                f'<div style="flex:1;min-width:200px;background:#fff3eb;border-left:5px solid #c00000;'
+                f'border-radius:8px;padding:14px 18px;border:1px solid #fddcb5;">'
+                f'<div style="font-size:22px;font-weight:bold;color:#c00000;">{n_neu_spiele}</div>'
+                f'<div style="color:#7c2d12;font-size:14px;">⏳ Spielanfrage{"n" if n_neu_spiele > 1 else ""} warten auf Bearbeitung</div>'
+                f'</div>'
+            )
+        if n_neu_frei > 0:
+            karten_html += (
+                f'<div style="flex:1;min-width:200px;background:#f0fdf4;border-left:5px solid #10b981;'
+                f'border-radius:8px;padding:14px 18px;border:1px solid #bbf7d0;">'
+                f'<div style="font-size:22px;font-weight:bold;color:#065f46;">{n_neu_frei}</div>'
+                f'<div style="color:#065f46;font-size:14px;">💬 Freie Anfrage{"n" if n_neu_frei > 1 else ""} warten auf Antwort</div>'
+                f'</div>'
+            )
+        if n_dfb > 0:
+            karten_html += (
+                f'<div style="flex:1;min-width:200px;background:#ebf0ff;border-left:5px solid #4f6ef7;'
+                f'border-radius:8px;padding:14px 18px;border:1px solid #c7d2fe;">'
+                f'<div style="font-size:22px;font-weight:bold;color:#312e81;">{n_dfb}</div>'
+                f'<div style="color:#3730a3;font-size:14px;">📋 Spiel{"e" if n_dfb > 1 else ""} noch nicht ins DFBnet eingetragen</div>'
+                f'</div>'
+            )
+        karten_html += '</div>'
+        st.markdown(karten_html, unsafe_allow_html=True)
+
+        # Letzte ausstehende Anfragen kurz auflisten
+        if n_neu > 0:
+            with st.expander(f"⏳ Ausstehende Anfragen anzeigen ({n_neu})", expanded=True):
+                offene = alle_anf[alle_anf["status"] == "ausstehend"].sort_values("erstellt_am", ascending=False).head(5)
+                for _, r in offene.iterrows():
+                    t_anf   = r.get("anfrage_typ") or "neu"
+                    tb      = typ_badge(t_anf)
+                    if t_anf == "allgemein":
+                        titel_str = (r.get("betreff") or r.get("notizen") or "Freie Anfrage")[:55]
+                        meta_str  = f'💬 von {r.get("erstellt_von","?")}' if r.get("erstellt_von") else "💬 Freie Anfrage"
+                    else:
+                        datum_str = pd.to_datetime(r["datum"]).strftime("%d.%m.%Y") if r.get("datum") else "–"
+                        titel_str = f'{r["heimteam"]} vs {r["gastteam"]}'
+                        meta_str  = f'📅 {datum_str} · {r["uhrzeit"]} · {r["platz"]}'
+                    st.markdown(
+                        f'<div style="background:#f8f8f8;border-radius:6px;padding:10px 14px;'
+                        f'margin-bottom:6px;border-left:3px solid #c00000;'
+                        f'display:flex;align-items:center;gap:8px;">'
+                        f'{tb} &nbsp;'
+                        f'<span><b style="color:#1a1a1a;">#{r["id"]} – {titel_str}</b>'
+                        f'<span style="color:#666;font-size:12px;margin-left:10px;">{meta_str}</span>'
+                        f'</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                if n_neu > 5:
+                    st.caption(f"… und {n_neu - 5} weitere. Alle unter **📨 Anfragen verwalten**.")
+    else:
+        st.success("✅ Keine offenen Anfragen – alles erledigt.")
+
+    st.divider()
+
     c1, c2, _ = st.columns([1, 1, 2])
     with c1:
         sel_date  = st.date_input("Woche ab", value=date.today())
@@ -1577,14 +2380,14 @@ def page_admin_dashboard() -> None:
     # Legende
     st.markdown(
         '<div style="margin:8px 0 18px 0;">'
-        '<span style="background:#C8102E;color:#fff;padding:3px 12px;'
+        '<span style="background:#c00000;color:#fff;padding:3px 12px;'
         'border-radius:20px;font-size:12px;margin-right:6px;">● Training</span>'
-        '<span style="background:#8a6300;color:#fff;padding:3px 12px;'
+        '<span style="background:#d08000;color:#fff;padding:3px 12px;'
         'border-radius:20px;font-size:12px;margin-right:6px;">● Spiel</span>'
-        '<span style="background:#4a0000;color:#fff;padding:3px 12px;'
+        '<span style="background:#c00000;color:#fff;padding:3px 12px;'
         'border-radius:20px;font-size:12px;margin-right:6px;">● Gesperrt</span>'
-        '<span style="background:#1a0005;color:#6c3040;padding:3px 12px;'
-        'border-radius:20px;font-size:12px;border:1px solid #3a0010;">● Frei</span>'
+        '<span style="background:#f5f5f5;color:#999;padding:3px 12px;'
+        'border-radius:20px;font-size:12px;border:1px solid #dddddd;">● Frei</span>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1597,7 +2400,7 @@ def page_admin_dashboard() -> None:
             is_locked  = platz in get_locked_pitches(cur_date)
             is_today   = cur_date == date.today()
             with col:
-                hdr_bg = "#C8102E" if is_today else "#3a0010"
+                hdr_bg = "#c00000" if is_today else "#999999"
                 st.markdown(
                     f'<div class="day-header" style="background:{hdr_bg};">'
                     f"{day_name[:2]}<br>"
@@ -1657,15 +2460,35 @@ def page_admin_dashboard() -> None:
 
 def _anfrage_card_html(r: pd.Series) -> str:
     """Kleine Karte für abgeschlossene/abgelehnte Anfragen."""
-    badge = status_badge(r["status"])
-    bear  = f' &nbsp;|&nbsp; 👤 {r["bearbeiter"]}' if r.get("bearbeiter") else ""
+    badge   = status_badge(r["status"])
+    t_badge = typ_badge(r.get("anfrage_typ") or "neu")
+    bear    = f' &nbsp;|&nbsp; 👤 {r["bearbeiter"]}' if r.get("bearbeiter") else ""
+    t_typ   = r.get("anfrage_typ") or "neu"
+
+    if t_typ == "allgemein":
+        betreff_txt = r.get("betreff") or r.get("notizen") or "Freie Anfrage"
+        von_txt     = f' &nbsp;|&nbsp; ✉️ {r["erstellt_von"]}' if r.get("erstellt_von") else ""
+        return (
+            f'<div class="anfrage-card">'
+            f'<div style="display:flex;justify-content:space-between;">'
+            f'<span style="color:#1a1a1a;font-weight:600;">#{r["id"]} – {betreff_txt}</span>'
+            f'<span>{t_badge}&nbsp;{badge}</span></div>'
+            f'<div style="color:#aaa;font-size:12px;margin-top:5px;">'
+            f'💬 Freie Anfrage{von_txt}{bear}</div></div>'
+        )
+
+    change_hint = ""
+    if t_typ in ("aenderung", "verlegung") and r.get("neues_datum"):
+        change_hint = f' &nbsp;→&nbsp; {r["neues_datum"]} {r.get("neue_uhrzeit","")}'
+    elif t_typ == "uhrzeit_aenderung" and r.get("neue_uhrzeit"):
+        change_hint = f' &nbsp;→&nbsp; ⏰ {r.get("neue_uhrzeit","")}'
     return (
         f'<div class="anfrage-card">'
         f'<div style="display:flex;justify-content:space-between;">'
-        f'<span style="color:#f0f0f0;">#{r["id"]} – {r["heimteam"]} vs {r["gastteam"]}</span>'
-        f'{badge}</div>'
+        f'<span style="color:#1a1a1a;font-weight:600;">#{r["id"]} – {r["heimteam"]} vs {r["gastteam"]}</span>'
+        f'<span>{t_badge}&nbsp;{badge}</span></div>'
         f'<div style="color:#aaa;font-size:12px;margin-top:5px;">'
-        f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]} &nbsp;|&nbsp; '
+        f'📅 {r["datum"]} &nbsp;|&nbsp; ⏰ {r["uhrzeit"]}{change_hint} &nbsp;|&nbsp; '
         f'🏟️ {r["platz"]}{bear}</div></div>'
     )
 
@@ -1705,6 +2528,56 @@ def page_anfragen_verwalten() -> None:
             st.info("Keine neuen Anfragen.")
         else:
             for _, r in df_neu.iterrows():
+                t_typ = r.get("anfrage_typ") or "neu"
+
+                # ─── Freie Anfragen: eigener Pfad, kein DFBnet-Schritt ───────
+                if t_typ == "allgemein":
+                    betreff_txt = r.get("betreff") or r.get("notizen") or "Freie Anfrage"
+                    with st.expander(
+                        f"💬 #{r['id']} – Freie Anfrage von "
+                        f"{r.get('erstellt_von','?')}: {betreff_txt[:60]}",
+                        expanded=True,
+                    ):
+                        st.markdown(typ_badge("allgemein"), unsafe_allow_html=True)
+                        if r.get("erstellt_von"):
+                            st.markdown(
+                                f'<span style="background:#e8f0fe;color:#1a56db;padding:2px 8px;'
+                                f'border-radius:10px;font-size:11px;">📤 Von: '
+                                f'{r["erstellt_von"]}</span>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(f"**Betreff:** {betreff_txt}")
+                        nachricht_txt = r.get("nachricht") or r.get("notizen") or ""
+                        if nachricht_txt:
+                            st.markdown(
+                                f'<div style="background:#f0fdf4;border-left:3px solid #10b981;'
+                                f'border-radius:4px;padding:10px 14px;margin:8px 0;'
+                                f'font-size:13px;white-space:pre-wrap;">{nachricht_txt}</div>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(
+                            f'<span style="color:#aaa;font-size:11px;">'
+                            f'📅 Eingegangen: {r.get("erstellt_am","")}</span>',
+                            unsafe_allow_html=True,
+                        )
+                        ba1, ba2 = st.columns(2)
+                        with ba1:
+                            if st.button(
+                                "✅ Zur Kenntnis genommen", key=f"ok_{r['id']}",
+                                type="primary", use_container_width=True,
+                            ):
+                                update_anfrage_status(r["id"], "abgeschlossen", "Admin")
+                                st.rerun()
+                        with ba2:
+                            if st.button(
+                                "❌ Ablehnen", key=f"no_{r['id']}",
+                                type="secondary", use_container_width=True,
+                            ):
+                                update_anfrage_status(r["id"], "abgelehnt", "Admin")
+                                st.rerun()
+                    continue
+
+                # ─── Spiel-bezogene Anfragen ─────────────────────────────────
                 conflicts = find_conflicts(
                     df_training,
                     date.fromisoformat(r["datum"]),
@@ -1717,23 +2590,34 @@ def page_anfragen_verwalten() -> None:
                     f"{r['datum']} {r['uhrzeit']}  |  {r['platz']}",
                     expanded=True,
                 ):
-                    t_badge = typ_badge(r.get('anfrage_typ') or 'neu')
-                    st.markdown(t_badge, unsafe_allow_html=True)
-                    # Bei Änderungs-/Stornierungsanträgen: referenziertes Spiel anzeigen
-                    if (r.get('anfrage_typ') or 'neu') in ('aenderung', 'stornierung'):
-                        ref_id = r.get('spiel_id')
+                    st.markdown(typ_badge(t_typ), unsafe_allow_html=True)
+                    # Referenziertes Spiel + gewünschte Änderung anzeigen
+                    if t_typ in ("aenderung", "verlegung", "uhrzeit_aenderung", "stornierung"):
+                        ref_id = r.get("spiel_id")
                         if ref_id:
                             alle_sp = get_all_matches()
-                            ref_row = alle_sp[alle_sp['id'] == ref_id]
+                            ref_row = alle_sp[alle_sp["id"] == ref_id]
                             if not ref_row.empty:
                                 rm = ref_row.iloc[0]
+                                new_hint = ""
+                                if t_typ in ("aenderung", "verlegung", "uhrzeit_aenderung"):
+                                    nd = r.get("neues_datum") or ""
+                                    nu = r.get("neue_uhrzeit") or ""
+                                    np_ = r.get("neuer_platz") or ""
+                                    if nd or nu:
+                                        new_hint = (
+                                            f' &nbsp;→&nbsp; <b>{nd} {nu}'
+                                            f'{(" · " + np_) if np_ and np_ != rm["platz"] else ""}'
+                                            f'</b>'
+                                        )
                                 st.markdown(
-                                    f'<div style="background:#1a0005;border-left:3px solid #f0a500;'
+                                    f'<div style="background:#fffbea;border-left:3px solid #d08000;'
                                     f'padding:6px 10px;border-radius:4px;margin-bottom:8px;'
-                                    f'font-size:12px;color:#ccc;">'
+                                    f'font-size:12px;color:#5a3e00;">'
                                     f'Referenzspiel #{rm["id"]}: '
                                     f'{rm["heimteam"]} vs {rm["gastteam"]} · '
-                                    f'{rm["datum"]} {rm["uhrzeit"]} · {rm["platz"]}</div>',
+                                    f'{rm["datum"]} {rm["uhrzeit"]} · {rm["platz"]}'
+                                    f'{new_hint}</div>',
                                     unsafe_allow_html=True,
                                 )
                     ic1, ic2, ic3, ic4 = st.columns(4)
@@ -1746,7 +2630,7 @@ def page_anfragen_verwalten() -> None:
                     )
                     if r.get("erstellt_von"):
                         st.markdown(
-                            f'<span style="background:#1e3a5f;color:#90c8ff;padding:2px 8px;'
+                            f'<span style="background:#e8f0fe;color:#1a56db;padding:2px 8px;'
                             f'border-radius:10px;font-size:11px;">📤 Eingereicht von: '
                             f'{r["erstellt_von"]}</span>',
                             unsafe_allow_html=True,
@@ -1757,36 +2641,34 @@ def page_anfragen_verwalten() -> None:
                     if locked:
                         st.error(f"🚫 Platz **{r['platz']}** ist gesperrt!")
                     if conflicts:
-                        st.warning(
-                            f"⚠️ Konflikt: **{', '.join(conflicts)}** trainieren zu diesem Zeitpunkt."
+                        st.info(
+                            f"ℹ️ **{', '.join(conflicts)}** trainieren zu diesem Zeitpunkt. "
+                            f"Der Trainer hat die Zustimmung bereits bei der Anfrage bestätigt."
                         )
-                        approved = st.checkbox(
-                            f"✅ Ich bestätige die Zustimmung der betroffenen Trainer:innen "
-                            f"(**{', '.join(conflicts)}**).",
-                            key=f"chk_{r['id']}",
+                    approved = True
+
+                    # Kabinenzuweisung (außer bei Stornierungen)
+                    if t_typ in ("neu", "aenderung", "verlegung", "uhrzeit_aenderung"):
+                        ziel_datum   = r.get("neues_datum") or r["datum"]
+                        ziel_uhrzeit = r.get("neue_uhrzeit") or r["uhrzeit"]
+                        freie_k_gen  = get_free_kabinen(
+                            date.fromisoformat(ziel_datum), ziel_uhrzeit
                         )
-                    else:
-                        approved = True
+                        gen_kc1, gen_kc2 = st.columns(2)
+                        with gen_kc1:
+                            gen_kab_h = st.selectbox(
+                                "🏠 Kabine Heim", freie_k_gen, key=f"gkh_{r['id']}",
+                            )
+                        with gen_kc2:
+                            rest_gen = [k for k in freie_k_gen if k != gen_kab_h]
+                            gen_kab_g = st.selectbox(
+                                "✈️ Kabine Gast",
+                                rest_gen if rest_gen else freie_k_gen,
+                                key=f"gkg_{r['id']}",
+                            )
 
                     bc1, bc2 = st.columns(2)
                     with bc1:
-                        # Kabinenzuweisung für neue Anfragen
-                        if (r.get("anfrage_typ") or "neu") in ("neu", "aenderung"):
-                            freie_k_gen = get_free_kabinen(date.fromisoformat(r["datum"]), r["uhrzeit"])
-                            gen_kc1, gen_kc2 = st.columns(2)
-                            with gen_kc1:
-                                gen_kab_h = st.selectbox(
-                                    "🏠 Kabine Heim",
-                                    freie_k_gen,
-                                    key=f"gkh_{r['id']}",
-                                )
-                            with gen_kc2:
-                                rest_gen = [k for k in freie_k_gen if k != gen_kab_h]
-                                gen_kab_g = st.selectbox(
-                                    "✈️ Kabine Gast",
-                                    rest_gen if rest_gen else freie_k_gen,
-                                    key=f"gkg_{r['id']}",
-                                )
                         if st.button(
                             "📋 Genehmigen → DFBnet eintragen",
                             key=f"ok_{r['id']}", use_container_width=True,
@@ -1796,11 +2678,10 @@ def page_anfragen_verwalten() -> None:
                             elif conflicts and not approved:
                                 st.error("Bitte Trainer-Zustimmung bestätigen.")
                             else:
-                                # Kabine in die Anfrage schreiben (außer bei Stornierungen)
-                                if (r.get("anfrage_typ") or "neu") in ("neu", "aenderung"):
+                                if t_typ in ("neu", "aenderung", "verlegung", "uhrzeit_aenderung"):
                                     kabine_gen = f"{gen_kab_h} / {gen_kab_g}"
                                     _kconn = db_connect()
-                                    if (r.get("anfrage_typ") or "neu") == "aenderung":
+                                    if t_typ in ("aenderung", "verlegung", "uhrzeit_aenderung"):
                                         _kconn.execute(
                                             "UPDATE spielanfragen SET neue_kabine=? WHERE id=?",
                                             (kabine_gen, r["id"]),
@@ -1839,6 +2720,7 @@ def page_anfragen_verwalten() -> None:
                         ):
                             update_anfrage_status(r["id"], "abgelehnt", "Admin")
                             st.rerun()
+
 
     # ─── TAB 2: DFBnet ausstehend ────────────────────────────────────────────
     with tab_dfb:
@@ -1885,8 +2767,10 @@ def page_anfragen_verwalten() -> None:
                         sid  = confirm_dfbnet(r["id"])
                         if typ_ == 'stornierung':
                             st.success("✅ Spiel storniert und aus dem Dashboard entfernt!")
-                        elif typ_ == 'aenderung':
-                            st.success(f"✅ Spiel #{sid} aktualisiert, DFBnet bestätigt!")
+                        elif typ_ in ('aenderung', 'verlegung', 'uhrzeit_aenderung'):
+                            lbl = {"aenderung": "aktualisiert", "verlegung": "verlegt",
+                                   "uhrzeit_aenderung": "Uhrzeit geändert"}.get(typ_, "aktualisiert")
+                            st.success(f"✅ Spiel #{sid} {lbl}, DFBnet bestätigt!")
                         else:
                             st.success(f"✅ Spiel #{sid} im Dashboard gespeichert, DFBnet bestätigt!")
                         # ── Typ-spezifische Trainer-Mail ────────────────────
@@ -1900,7 +2784,7 @@ def page_anfragen_verwalten() -> None:
                                 )
                                 subj = (f"[FCTM] ❌ Spielabsage: {r['heimteam']} vs "
                                         f"{r['gastteam']} ({r['datum']})")
-                            elif typ_ == 'aenderung':
+                            elif typ_ in ('aenderung', 'verlegung', 'uhrzeit_aenderung'):
                                 trainer_html = _mail_trainer_aenderung_html(
                                     date.fromisoformat(r['datum']),
                                     r['uhrzeit'], r['platz'], r.get('kabine',''),
@@ -1910,8 +2794,9 @@ def page_anfragen_verwalten() -> None:
                                     r.get('neue_kabine')  or r.get('kabine',''),
                                     r['heimteam'], r['gastteam'],
                                 )
-                                subj = (f"[FCTM] ✏️ Spieländerung: {r['heimteam']} vs "
-                                        f"{r['gastteam']} ({r['datum']})")
+                                icons = {"aenderung": "✏️", "verlegung": "⏩", "uhrzeit_aenderung": "⏰"}
+                                subj = (f"[FCTM] {icons.get(typ_,'✏️')} Spieländerung: "
+                                        f"{r['heimteam']} vs {r['gastteam']} ({r['datum']})")
                             else:
                                 trainer_html = _mail_trainer_html(
                                     date.fromisoformat(r['datum']),
@@ -2264,7 +3149,8 @@ def page_saisonplanung() -> None:
         unsafe_allow_html=True,
     )
 
-    saison_default = f"{date.today().year}/{date.today().year + 1}"
+    _sy, _sm = date.today().year, date.today().month
+    saison_default = f"{_sy - 1}/{_sy}" if _sm < 7 else f"{_sy}/{_sy + 1}"
     saison = st.text_input("Saison (z. B. 2025/2026)", value=saison_default)
     st.session_state["aktuell_saison"] = saison
 
@@ -2514,11 +3400,11 @@ def page_saisonplanung() -> None:
                     ikon = "🔴" if is_conflict else ("🚿" if teams_in else "🔓")
                     teams_html = (
                         "".join(
-                            f'<div style="font-size:11px;color:#ffd6dc;margin-top:3px;">{t}</div>'
+                            f'<div style="font-size:11px;color:#333;margin-top:3px;">{t}</div>'
                             for t in teams_in
                         )
                         if teams_in
-                        else '<div style="color:#4a1020;font-size:11px;">Frei</div>'
+                        else '<div style="color:#999;font-size:11px;">Frei</div>'
                     )
                     st.markdown(
                         f'<div class="{css}"><div style="font-size:24px;">{ikon}</div>'
@@ -2628,7 +3514,7 @@ def page_platzverwaltung() -> None:
                     f'<div style="font-size:26px;">✅</div>'
                     f'<div style="color:#C8102E;font-weight:bold;font-size:11px;margin:6px 0;">'
                     f"{platz}</div>"
-                    f'<div style="color:#ffa0b0;font-size:10px;">VERFÜGBAR</div></div>',
+                    f'<div style="color:#888;font-size:10px;">VERFÜGBAR</div></div>',
                     unsafe_allow_html=True,
                 )
 
@@ -2667,7 +3553,7 @@ def page_statistiken() -> None:
                     f'<div class="stat-card">'
                     f'<div style="font-size:34px;font-weight:bold;color:{val_color};">'
                     f'{int(row["ausfaelle"])}</div>'
-                    f'<div style="color:#f0f0f0;font-size:13px;margin-top:8px;">{row["team"]}</div>'
+                    f'<div style="color:#1a1a1a;font-size:13px;margin-top:8px;">{row["team"]}</div>'
                     f'<div style="color:#888;font-size:11px;">Ausfälle</div></div>',
                     unsafe_allow_html=True,
                 )
@@ -2684,8 +3570,8 @@ def page_einstellungen() -> None:
         unsafe_allow_html=True,
     )
 
-    tab_pin, tab_mail, tab_info = st.tabs(
-        ["🔑 Admin-PIN", "📧 E-Mail / SMTP", "ℹ️ System-Info"]
+    tab_pin, tab_ms, tab_mail, tab_info = st.tabs(
+        ["🔑 Admin-PIN", "🔷 Microsoft-Login", "📧 E-Mail / SMTP", "ℹ️ System-Info"]
     )
 
     # ── PIN ───────────────────────────────────────────────────────────────────
@@ -2708,6 +3594,53 @@ def page_einstellungen() -> None:
                     set_setting("admin_pin", new_pin)
                     st.success("✅ PIN erfolgreich geändert.")
 
+    # ── Microsoft-Login ───────────────────────────────────────────────────────
+    with tab_ms:
+        st.subheader("Microsoft-Login (Azure AD / Entra ID)")
+        st.markdown(
+            "Tragen Sie hier die Daten Ihrer **Azure App-Registrierung** ein. "
+            "Danach erscheint auf der Login-Seite der Button **🔷 Mit Microsoft anmelden**."
+        )
+        st.divider()
+        with st.form("ms_form"):
+            ms_cid  = st.text_input("Application (Client) ID",
+                                    value=get_setting("ms_client_id"),
+                                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+            ms_tid  = st.text_input("Directory (Tenant) ID",
+                                    value=get_setting("ms_tenant_id") or "common",
+                                    placeholder="common  oder  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+            ms_sec  = st.text_input("Client Secret",
+                                    value=get_setting("ms_client_secret"),
+                                    type="password",
+                                    placeholder="Leer = Public-Client (PKCE nicht unterstützt)")
+            ms_ruri = st.text_input("Redirect URI",
+                                    value=get_setting("ms_redirect_uri") or "http://localhost:8501",
+                                    placeholder="http://localhost:8501")
+            ms_adm  = st.text_area("Admin-E-Mail-Adressen",
+                                   value=get_setting("admin_emails"),
+                                   placeholder="admin@fctm.de\nvorstand@fctm.de",
+                                   help="Eine Adresse pro Zeile. Diese erhalten Admin-Zugang.")
+            if st.form_submit_button("💾 Speichern", type="primary"):
+                set_setting("ms_client_id",     ms_cid.strip())
+                set_setting("ms_tenant_id",     ms_tid.strip() or "common")
+                set_setting("ms_client_secret", ms_sec.strip())
+                set_setting("ms_redirect_uri",  ms_ruri.strip())
+                set_setting("admin_emails",     ms_adm.strip())
+                st.success("✅ Microsoft-Login-Einstellungen gespeichert.")
+                st.rerun()
+
+        with st.expander("📖 Azure App-Registrierung einrichten (Schritt für Schritt)"):
+            st.markdown("""
+1. **Azure Portal** öffnen: [portal.azure.com](https://portal.azure.com)
+2. **Microsoft Entra ID → App-Registrierungen → Neue Registrierung**
+3. Name: z. B. `FCTM Spielbetrieb`
+4. Kontotypen: *Nur Konten in diesem Organisationsverzeichnis*
+5. Redirect URI: `Web` → Ihre Streamlit-URL (z. B. `http://localhost:8501`)
+6. Nach Erstellung: **Application (Client) ID** und **Directory (Tenant) ID** kopieren
+7. Unter **Zertifikate & Geheimnisse → Neuer geheimer Clientschlüssel** erstellen
+8. Unter **API-Berechtigungen**: `openid`, `profile`, `email` sind standardmäßig vorhanden
+""")
+
     # ── E-Mail / SMTP ─────────────────────────────────────────────────────────
     with tab_mail:
         st.subheader("E-Mail-Benachrichtigungen")
@@ -2716,6 +3649,12 @@ def page_einstellungen() -> None:
             "**Funktionspostfach** gesendet. Die Mail enthält alle Spieldetails "
             "und einen **Hinweis zur DFBnet-Eintragung durch den Ansetzer**."
         )
+        if get_setting("ms_client_id") and get_setting("ms_client_secret"):
+            st.success(
+                "🔷 **Microsoft Graph API aktiv** – Mails werden über die Azure App "
+                "versendet (kein SMTP-Passwort erforderlich). "
+                "SMTP-Felder werden als Fallback ignoriert."
+            )
         st.divider()
 
         cfg = _email_cfg()
@@ -2845,57 +3784,90 @@ def page_login() -> None:
     st.write("")
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
-        tab_u, tab_a = st.tabs(["👤 Als Benutzer", "🔑 Als Administrator"])
+        ms_client_id  = get_setting("ms_client_id")
+        redirect_uri  = get_setting("ms_redirect_uri") or "http://localhost:8501"
 
-        with tab_u:
+        if ms_client_id:
+            # ── Microsoft-Login (primäre Option) ──────────────────────────
             st.markdown(
-                '<p style="color:#ffa0b0;font-size:13px;text-align:center;margin:12px 0;">'
-                "Benutzer können den Trainingsplan einsehen und Spielanfragen stellen."
+                '<p style="color:#555;font-size:13px;text-align:center;margin:0 0 16px 0;">'
+                "Melden Sie sich mit Ihrem FCTM-Microsoft-Konto an."
                 "</p>",
                 unsafe_allow_html=True,
             )
-            # Teams aus Saisonplanung laden
-            _conn_t = db_connect()
-            _teams_db = [r[0] for r in _conn_t.execute(
-                "SELECT DISTINCT team FROM saisonplanung "
-                "WHERE team IS NOT NULL AND team != '' ORDER BY team"
-            ).fetchall()]
-            _conn_t.close()
-            _team_opts = ["– Mannschaft wählen –"] + _teams_db + ["Sonstige / Individuell"]
-            u_team_sel = st.selectbox("Mannschaft", _team_opts, key="login_team_sel")
-            if u_team_sel == "Sonstige / Individuell":
-                u_team_val = st.text_input(
-                    "Mannschaft (manuell eingeben)",
-                    placeholder="z. B. 3. Mannschaft",
-                    key="login_team_txt",
+            login_url = ms_auth_url(redirect_uri)
+            st.markdown(
+                f'<div style="text-align:center;margin-bottom:20px;">'
+                f'<a href="{login_url}" target="_self" style="'
+                f'display:inline-block;padding:12px 28px;background:#0078d4;color:#fff;'
+                f'border-radius:6px;text-decoration:none;font-size:16px;font-weight:bold;">'
+                f'🔷 Mit Microsoft anmelden</a></div>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("🔧 Admin-PIN-Fallback"):
+                pin_input = st.text_input(
+                    "Admin-PIN", type="password", placeholder="PIN eingeben …",
+                    key="login_pin",
                 )
-            else:
-                u_team_val = "" if u_team_sel == "– Mannschaft wählen –" else u_team_sel
-            if st.button("▶️ Als Benutzer fortfahren", type="primary", use_container_width=True):
-                if not u_team_val.strip():
-                    st.error("Bitte zuerst eine Mannschaft auswählen oder eingeben.")
-                else:
-                    st.session_state.role = "benutzer"
-                    st.session_state.team = u_team_val.strip()
-                    st.rerun()
+                if st.button("🔑 Als Admin einloggen", use_container_width=True):
+                    if pin_input == get_setting("admin_pin"):
+                        st.session_state.role = "admin"
+                        st.session_state.ms_name = ""
+                        st.rerun()
+                    else:
+                        st.error("Falscher PIN.")
+        else:
+            # ── Klassischer Login (Microsoft nicht konfiguriert) ───────────
+            tab_u, tab_a = st.tabs(["👤 Als Benutzer", "🔑 Als Administrator"])
 
-        with tab_a:
-            st.markdown(
-                '<p style="color:#ffa0b0;font-size:13px;text-align:center;margin:12px 0;">'
-                "Vollzugriff auf alle Funktionen."
-                "</p>",
-                unsafe_allow_html=True,
-            )
-            pin_input = st.text_input(
-                "Admin-PIN", type="password", placeholder="PIN eingeben …",
-                key="login_pin",
-            )
-            if st.button("🔑 Als Admin einloggen", use_container_width=True):
-                if pin_input == get_setting("admin_pin"):
-                    st.session_state.role = "admin"
-                    st.rerun()
+            with tab_u:
+                st.markdown(
+                    '<p style="color:#555;font-size:13px;text-align:center;margin:12px 0;">'
+                    "Benutzer können den Trainingsplan einsehen und Spielanfragen stellen."
+                    "</p>",
+                    unsafe_allow_html=True,
+                )
+                _conn_t = db_connect()
+                _teams_db = [r[0] for r in _conn_t.execute(
+                    "SELECT DISTINCT team FROM saisonplanung "
+                    "WHERE team IS NOT NULL AND team != '' ORDER BY team"
+                ).fetchall()]
+                _conn_t.close()
+                _team_opts = ["– Mannschaft wählen –"] + _teams_db + ["Sonstige / Individuell"]
+                u_team_sel = st.selectbox("Mannschaft", _team_opts, key="login_team_sel")
+                if u_team_sel == "Sonstige / Individuell":
+                    u_team_val = st.text_input(
+                        "Mannschaft (manuell eingeben)",
+                        placeholder="z. B. 3. Mannschaft",
+                        key="login_team_txt",
+                    )
                 else:
-                    st.error("Falscher PIN. Standard-PIN: 1234")
+                    u_team_val = "" if u_team_sel == "– Mannschaft wählen –" else u_team_sel
+                if st.button("▶️ Als Benutzer fortfahren", type="primary", use_container_width=True):
+                    if not u_team_val.strip():
+                        st.error("Bitte zuerst eine Mannschaft auswählen oder eingeben.")
+                    else:
+                        st.session_state.role = "benutzer"
+                        st.session_state.team = u_team_val.strip()
+                        st.rerun()
+
+            with tab_a:
+                st.markdown(
+                    '<p style="color:#555;font-size:13px;text-align:center;margin:12px 0;">'
+                    "Vollzugriff auf alle Funktionen."
+                    "</p>",
+                    unsafe_allow_html=True,
+                )
+                pin_input = st.text_input(
+                    "Admin-PIN", type="password", placeholder="PIN eingeben …",
+                    key="login_pin",
+                )
+                if st.button("🔑 Als Admin einloggen", use_container_width=True):
+                    if pin_input == get_setting("admin_pin"):
+                        st.session_state.role = "admin"
+                        st.rerun()
+                    else:
+                        st.error("Falscher PIN.")
 
 
 # ---------------------------------------------------------------------------
@@ -2912,27 +3884,71 @@ def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     init_db()
 
+    # ── Cookie-Controller (muss früh initialisiert werden) ──────────────────
+    _cookies = CookieController()
+
+    # ── OAuth-Callback (Microsoft-Login) ────────────────────────────────────
+    _params = st.query_params
+    if "code" in _params and not st.session_state.get("role"):
+        _redirect_uri = get_setting("ms_redirect_uri") or "http://localhost:8501"
+        _result = ms_exchange_code(_params["code"], _redirect_uri)
+        st.query_params.clear()
+        if _result and "id_token_claims" in _result:
+            _claims = _result["id_token_claims"]
+            _email  = (_claims.get("preferred_username") or _claims.get("email") or "").strip()
+            _name   = _claims.get("name", _email)
+            _role, _team = ms_role_from_email(_email)
+            if _role:
+                _token = session_save(_role, _team, _name, _email)
+                _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
+                st.session_state.role     = _role
+                st.session_state.team     = _team
+                st.session_state.ms_name  = _name
+                st.session_state.ms_email = _email
+                st.session_state["_session_token"] = _token
+                st.rerun()
+            else:
+                st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
+                st.stop()
+        else:
+            st.error("❌ Microsoft-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
+            st.stop()
+
     # Session initialisieren
     if "role" not in st.session_state:
         st.session_state.role = None
-    if "training_df" not in st.session_state:
-        saison_default = f"{date.today().year}/{date.today().year + 1}"
-        sp = get_saisonplanung(saison_default)
-        if not sp.empty:
-            sp_ren = sp.rename(columns={
-                "team": "Team", "platz": "Platz",
-                "tag":  "Tag",  "zeit":  "Zeit",  "kabine": "Kabine",
-            })
-            def _bereich(p: str) -> str:
-                if "Kunstrasen" in p: return "Kunstrasen"
-                if "Wigger"     in p: return "Wigger-Arena"
-                return "Rasen"
-            sp_ren["Bereich"] = sp_ren["Platz"].apply(_bereich)
-            st.session_state.training_df = sp_ren[["Platz","Bereich","Tag","Zeit","Team"]]
-        else:
-            st.session_state.training_df = pd.DataFrame(
-                columns=["Platz","Bereich","Tag","Zeit","Team"]
-            )
+        # Cookie prüfen → Session wiederherstellen
+        _token = _cookies.get(_COOKIE_NAME)
+        if _token:
+            _sess = session_load(_token)
+            if _sess:
+                st.session_state.role     = _sess["role"]
+                st.session_state.team     = _sess["team"]
+                st.session_state.ms_name  = _sess["ms_name"]
+                st.session_state.ms_email = _sess["ms_email"]
+                st.session_state["_session_token"] = _token
+
+    # Trainingsdaten immer frisch laden (damit neue Einträge sofort sichtbar sind)
+    # Fußball-Saison: August–Juni → vor Juli = laufende Saison beginnt im Vorjahr
+    _y = date.today().year
+    _m = date.today().month
+    saison_default = f"{_y - 1}/{_y}" if _m < 7 else f"{_y}/{_y + 1}"
+    sp = get_saisonplanung(saison_default)
+    if not sp.empty:
+        sp_ren = sp.rename(columns={
+            "team": "Team", "platz": "Platz",
+            "tag":  "Tag",  "zeit":  "Zeit",  "kabine": "Kabine",
+        })
+        def _bereich(p: str) -> str:
+            if "Kunstrasen" in p: return "Kunstrasen"
+            if "Wigger"     in p: return "Wigger-Arena"
+            return "Rasen"
+        sp_ren["Bereich"] = sp_ren["Platz"].apply(_bereich)
+        st.session_state.training_df = sp_ren[["Platz","Bereich","Tag","Zeit","Team"]]
+    else:
+        st.session_state.training_df = pd.DataFrame(
+            columns=["Platz","Bereich","Tag","Zeit","Team"]
+        )
 
     # Nicht eingeloggt → Login
     if st.session_state.role is None:
@@ -2949,25 +3965,34 @@ def main() -> None:
             else '<span class="role-badge-user">👤 Benutzer</span>'
         )
         team_line = (
-            f'<br><span style="color:#ffa0b0;font-size:12px;">⚽ {my_team_sb}</span>'
+            f'<br><span style="color:#ffdada;font-size:12px;">⚽ {my_team_sb}</span>'
             if role == "benutzer" and my_team_sb else ""
         )
         st.markdown(
             '<div style="text-align:center;padding:16px 0 10px 0;">'
             '<span style="font-size:40px;">⚽</span><br>'
             '<span style="color:#fff;font-size:18px;font-weight:bold;">FCTM</span><br>'
-            '<span style="color:#ffa0b0;font-size:11px;">Spielbetrieb-Manager</span><br>'
+            '<span style="color:#ffdada;font-size:11px;">Spielbetrieb-Manager</span><br>'
             f'<div style="margin-top:8px;">{badge_html}</div>'
             f'{team_line}'
-            "</div>",
+            + (f'<br><span style="color:#aad4f5;font-size:11px;">'
+               f'🔷 {st.session_state.get("ms_name","")}'
+               f'</span>'
+               if st.session_state.get("ms_name") else "")
+            + "</div>",
             unsafe_allow_html=True,
         )
         st.divider()
 
         if role == "admin":
+            _n_offen = 0
+            if not get_all_anfragen().empty:
+                _anf = get_all_anfragen()
+                _n_offen = len(_anf[_anf["status"].isin(["ausstehend", "dfbnet_ausstehend"])])
+            _anfragen_label = f"📨 Anfragen verwalten {'🔴' if _n_offen > 0 else ''}"
             options = [
                 "📅 Dashboard",
-                "📨 Anfragen verwalten",
+                _anfragen_label,
                 "➕ Spiel anlegen",
                 "📋 Trainingsplan",
                 "📆 Saisonplanung",
@@ -2978,7 +4003,7 @@ def main() -> None:
         else:
             options = [
                 "📋 Trainingsplan",
-                "📨 Spielanfrage stellen",
+                "📨 Meine Anfragen",
             ]
 
         page = st.radio("Navigation", options, label_visibility="collapsed")
@@ -2989,8 +4014,14 @@ def main() -> None:
 
         st.divider()
         if st.button("🚪 Abmelden", type="secondary", use_container_width=True):
+            _tok = st.session_state.get("_session_token")
+            session_delete(_tok)
+            _cookies.remove(_COOKIE_NAME)
             st.session_state.role = None
             st.session_state.team = None
+            st.session_state.pop("ms_name", None)
+            st.session_state.pop("ms_email", None)
+            st.session_state.pop("_session_token", None)
             st.rerun()
         st.caption("Version 2.0.0 · FCTM")
 
@@ -2998,13 +4029,14 @@ def main() -> None:
     routing = {
         "📅 Dashboard":           page_admin_dashboard,
         "📨 Anfragen verwalten":  page_anfragen_verwalten,
+        "📨 Anfragen verwalten 🔴": page_anfragen_verwalten,
         "➕ Spiel anlegen":        page_admin_spiel_anlegen,
         "📋 Trainingsplan":        page_trainingsplan_view,
         "📆 Saisonplanung":        page_saisonplanung,
         "🔒 Platzverwaltung":      page_platzverwaltung,
         "📊 Statistiken":          page_statistiken,
         "⚙️ Einstellungen":        page_einstellungen,
-        "📨 Spielanfrage stellen": page_user_anfrage,
+        "📨 Meine Anfragen": page_user_anfrage,
     }
     routing.get(page, page_trainingsplan_view)()
 
