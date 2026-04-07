@@ -519,6 +519,7 @@ def init_db() -> None:
         ("ms_redirect_uri", "http://localhost:8501"),
         ("admin_emails",    "lemke@westfalia-osterwick.de"),
         ("koordinator_emails", "spielbetrieb@westfalia-osterwick.de"),
+        ("verwalter_notizen",  ""),
     ]
     for key, val in defaults:
         c.execute(
@@ -2577,6 +2578,23 @@ def page_admin_dashboard() -> None:
         '<p>Vollständige Wochenübersicht – Training, Spiele &amp; Sperren</p></div>',
         unsafe_allow_html=True,
     )
+
+    # ── Verwalter-Notizen ─────────────────────────────────────────────────────
+    notizen_val = get_setting("verwalter_notizen") or ""
+    with st.expander("📝 Verwalter-Notizen" + (" ✏️" if notizen_val else " (leer)"), expanded=bool(notizen_val)):
+        st.caption("Gemeinsamer Notizblock für alle Verwalter und Administratoren (z. B. Vertretungshinweise, laufende Aufgaben).")
+        neue_notizen = st.text_area(
+            "Notizen",
+            value=notizen_val,
+            height=130,
+            label_visibility="collapsed",
+            key="verwalter_notizen_input",
+            placeholder="Hier können Verwalter Hinweise für Vertretungen hinterlassen …",
+        )
+        if st.button("💾 Notizen speichern", key="btn_notizen_save"):
+            set_setting("verwalter_notizen", neue_notizen.strip())
+            st.success("✅ Notizen gespeichert.")
+            st.rerun()
 
     # ── Aktions-Karten (offene Posten) ────────────────────────────────────────
     alle_anf = get_all_anfragen()
