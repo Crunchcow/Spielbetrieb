@@ -1773,9 +1773,29 @@ def confirm_dfbnet(aid: int) -> int:
             update_anfrage_status(aid, "abgeschlossen", "Admin")
             return int(r["spiel_id"])
         else:
-            # DFBnet-Spiel ohne Systemeintrag → nur Status abschließen
+            # DFBnet-Spiel ohne Systemeintrag → beim Bestätigen neu im System anlegen
+            ziel_datum = r.get("neues_datum") or r.get("datum")
+            ziel_uhrzeit = r.get("neue_uhrzeit") or r.get("uhrzeit") or ""
+            ziel_platz = r.get("neuer_platz") or r.get("platz") or ""
+            ziel_kabine = r.get("neue_kabine") or r.get("kabine") or ""
+
+            sid = save_match(
+                date.fromisoformat(ziel_datum),
+                ziel_uhrzeit,
+                ziel_platz,
+                r.get("heimteam") or "",
+                r.get("gastteam") or "",
+                ziel_kabine,
+                r.get("notizen") or "",
+                [],
+            )
+            conn2 = db_connect()
+            conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (sid,))
+            conn2.execute("UPDATE spielanfragen SET spiel_id=? WHERE id=?", (sid, aid))
+            conn2.commit()
+            conn2.close()
             update_anfrage_status(aid, "abgeschlossen", "Admin")
-            return 0
+            return sid
 
     # typ == 'neu' (Standard)
     sid = save_match(
