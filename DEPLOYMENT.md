@@ -5,6 +5,68 @@
 | | |
 |---|---|
 | **Stack** | Python + Streamlit |
+| **Datenbank** | SQLite (`fctm.db`, lokal auf dem Server – **nicht im Repo**) |
+| **Server** | `89.167.0.28` – Hostname: `WestfaliaOsterwick` (Ubuntu 24.04) |
+| **App-Pfad** | `/var/www/spielbetrieb/` |
+| **Service** | systemd → `spielbetrieb.service` (Port 8503) |
+| **Nginx** | `/etc/nginx/sites-enabled/spielbetrieb` |
+| **URL** | `https://spielbetrieb.westfalia-osterwick.de` (nach DNS-Eintrag) |
+
+---
+
+## Update deployen (nach jedem `git push`)
+
+```bash
+ssh root@89.167.0.28
+cd /var/www/spielbetrieb
+git pull origin main
+systemctl restart spielbetrieb
+```
+
+---
+
+## DNS-Eintrag (noch ausstehend)
+
+Damit SSL funktioniert, muss ein **A-Record** gesetzt werden:
+
+| Name | Typ | Wert |
+|------|-----|------|
+| `spielbetrieb` | A | `89.167.0.28` |
+
+Danach SSL-Zertifikat holen:
+```bash
+ssh root@89.167.0.28
+certbot --nginx -d spielbetrieb.westfalia-osterwick.de --non-interactive --agree-tos -m lemke@westfalia-osterwick.de --redirect
+```
+
+---
+
+## Nützliche Befehle auf dem Server
+
+```bash
+# Service-Status
+systemctl status spielbetrieb
+
+# Logs live
+journalctl -u spielbetrieb -f
+
+# Nginx neu laden
+nginx -t && systemctl reload nginx
+```
+
+---
+
+## Offene Punkte
+
+- [ ] DNS-Eintrag `spielbetrieb.westfalia-osterwick.de` → `89.167.0.28` setzen
+- [ ] SSL via Certbot einrichten (Befehl s. o.)
+
+
+## Projekt-Info
+
+| | |
+|---|---|
+| **Stack** | Python + Streamlit |
 | **Datenbank** | SQLite (`fctm.db`, lokal im Projektordner) |
 | **Starten (lokal)** | `streamlit run app.py` |
 
