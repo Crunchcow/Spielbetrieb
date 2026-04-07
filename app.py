@@ -499,6 +499,7 @@ def init_db() -> None:
         "ALTER TABLE spielanfragen ADD COLUMN betreff TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN nachricht TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN bearbeiter_kommentar TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN verwalter_notiz TEXT",
     ]:
         try:
             conn.execute(migration)
@@ -1535,6 +1536,16 @@ def get_all_anfragen() -> pd.DataFrame:
     df = pd.read_sql("SELECT * FROM spielanfragen ORDER BY datum,uhrzeit", conn)
     conn.close()
     return df
+
+
+def save_anfrage_notiz(anfrage_id: int, notiz: str) -> None:
+    conn = db_connect()
+    conn.execute(
+        "UPDATE spielanfragen SET verwalter_notiz=? WHERE id=?",
+        (notiz, anfrage_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def update_anfrage_status(aid: int, status: str, bearbeiter: str, kommentar: str = "") -> None:
@@ -2864,6 +2875,25 @@ def page_anfragen_verwalten() -> None:
                             f'📅 Eingegangen: {r.get("erstellt_am","")}</span>',
                             unsafe_allow_html=True,
                         )
+                        n_key = f"notiz_{r['id']}"
+                        cur_notiz = r.get("verwalter_notiz") or ""
+                        nc1, nc2 = st.columns([5, 1])
+                        with nc1:
+                            neue_notiz = st.text_area(
+                                "📝 Interne Notiz (nur für Verwalter)",
+                                value=cur_notiz,
+                                key=n_key,
+                                placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
+                                height=80,
+                                label_visibility="visible",
+                            )
+                        with nc2:
+                            st.write("")
+                            st.write("")
+                            if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
+                                save_anfrage_notiz(r["id"], neue_notiz.strip())
+                                st.success("Notiz gespeichert.")
+                                st.rerun()
                         frei_antwort = st.text_area(
                             "💬 Antwort an Trainer (optional)",
                             key=f"frei_antwort_{r['id']}",
@@ -2988,6 +3018,26 @@ def page_anfragen_verwalten() -> None:
                         )
                     if r.get("notizen"):
                         st.markdown(f"*Notiz: {r['notizen']}*")
+
+                    sn_key = f"notiz_{r['id']}"
+                    cur_notiz_s = r.get("verwalter_notiz") or ""
+                    sn1, sn2 = st.columns([5, 1])
+                    with sn1:
+                        neue_notiz_s = st.text_area(
+                            "📝 Interne Notiz (nur für Verwalter)",
+                            value=cur_notiz_s,
+                            key=sn_key,
+                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
+                            height=80,
+                            label_visibility="visible",
+                        )
+                    with sn2:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
+                            save_anfrage_notiz(r["id"], neue_notiz_s.strip())
+                            st.success("Notiz gespeichert.")
+                            st.rerun()
 
                     if locked:
                         st.error(f"🚫 Platz **{r['platz']}** ist gesperrt!")
@@ -3129,6 +3179,26 @@ def page_anfragen_verwalten() -> None:
                     if r.get("notizen"):
                         st.markdown(f"*Notiz: {r['notizen']}*")
 
+                    dn_key = f"notiz_{r['id']}"
+                    cur_notiz_d = r.get("verwalter_notiz") or ""
+                    dn1, dn2 = st.columns([5, 1])
+                    with dn1:
+                        neue_notiz_d = st.text_area(
+                            "📝 Interne Notiz (nur für Verwalter)",
+                            value=cur_notiz_d,
+                            key=dn_key,
+                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
+                            height=80,
+                            label_visibility="visible",
+                        )
+                    with dn2:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
+                            save_anfrage_notiz(r["id"], neue_notiz_d.strip())
+                            st.success("Notiz gespeichert.")
+                            st.rerun()
+
                     # Trainer-E-Mail-Lookup
                     team_mail = get_trainer_email_for_team(r["heimteam"])
                     custom_mail = st.text_input(
@@ -3203,7 +3273,33 @@ def page_anfragen_verwalten() -> None:
             st.info("Noch keine abgeschlossenen Vorgänge.")
         else:
             for _, r in df_done.iterrows():
-                st.markdown(_anfrage_card_html(r), unsafe_allow_html=True)
+                done_notiz = r.get("verwalter_notiz") or ""
+                notiz_suffix = " 📝" if done_notiz else ""
+                label  = r.get("anfrage_typ") or "neu"
+                titel  = (
+                    f"#{r['id']} – {r.get('heimteam','?')} vs {r.get('gastteam','?')}  |  "
+                    f"{r.get('datum','')} {r.get('uhrzeit','')}  |  "
+                    f"[{r.get('status','').upper()}]{notiz_suffix}"
+                )
+                with st.expander(titel, expanded=False):
+                    st.markdown(_anfrage_card_html(r), unsafe_allow_html=True)
+                    done_n1, done_n2 = st.columns([5, 1])
+                    with done_n1:
+                        neue_notiz_done = st.text_area(
+                            "📝 Interne Notiz (nur für Verwalter)",
+                            value=done_notiz,
+                            key=f"notiz_{r['id']}",
+                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
+                            height=80,
+                            label_visibility="visible",
+                        )
+                    with done_n2:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
+                            save_anfrage_notiz(r["id"], neue_notiz_done.strip())
+                            st.success("Notiz gespeichert.")
+                            st.rerun()
 
 
 def page_admin_spiel_anlegen() -> None:
