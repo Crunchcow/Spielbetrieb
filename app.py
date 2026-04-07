@@ -26,6 +26,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fctm.db")
 DEFAULT_ADMIN_PIN = "1234"
 
 DAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+WEEKDAYS_DISPLAY = DAYS[:5]
 
 TIME_SLOTS_TRAINING = [f"{h:02d}:{m:02d}" for h in range(8, 22) for m in (0, 30)]
 
@@ -2138,6 +2139,7 @@ def page_trainingsplan_view() -> None:
         '<p>Saisonbelegung aller Plätze – unveränderlich während der Saison</p></div>',
         unsafe_allow_html=True,
     )
+    st.caption("Angezeigt werden bewusst nur Montag bis Freitag. Spielanfragen, Verlegungen und Stornierungen koennen weiterhin fuer jeden Kalendertag gestellt werden.")
 
     # Automatisch aus DB laden falls noch nichts im Session-State
     df_training = st.session_state.get("training_df", pd.DataFrame())
@@ -2159,7 +2161,7 @@ def page_trainingsplan_view() -> None:
 
     c1, c2 = st.columns([1, 2])
     with c1:
-        sel_day   = st.selectbox("Tag",   ["Alle"] + DAYS)
+        sel_day   = st.selectbox("Tag",   ["Alle"] + WEEKDAYS_DISPLAY)
     with c2:
         sel_pitch = st.selectbox("Platz", ["Alle"] + PITCHES)
 
@@ -2178,7 +2180,7 @@ def page_trainingsplan_view() -> None:
         if p_data.empty:
             continue
         st.markdown(f"### 🏟️ {platz}")
-        days_show = DAYS if sel_day == "Alle" else [sel_day]
+        days_show = WEEKDAYS_DISPLAY if sel_day == "Alle" else [sel_day]
         cols = st.columns(len(days_show))
         for col, day in zip(cols, days_show):
             with col:
@@ -2839,9 +2841,10 @@ def page_admin_dashboard() -> None:
         sel_pitch = st.selectbox("Platz", ["Alle"] + PITCHES)
 
     week_start  = sel_date - timedelta(days=sel_date.weekday())
-    week_dates  = [week_start + timedelta(days=i) for i in range(7)]
+    week_dates  = [week_start + timedelta(days=i) for i in range(5)]
     df_training = st.session_state.get("training_df", pd.DataFrame())
     show_pitches = PITCHES if sel_pitch == "Alle" else [sel_pitch]
+    st.caption("Die Wochenansicht zeigt bewusst nur Montag bis Freitag. Wochenendspiele koennen weiterhin beantragt und verarbeitet werden, ohne dass ein kompletter Spielplan manuell gepflegt werden muss.")
 
     # Legende
     st.markdown(
@@ -2860,9 +2863,9 @@ def page_admin_dashboard() -> None:
 
     for platz in show_pitches:
         st.markdown(f"### 🏟️ {platz}")
-        day_cols = st.columns(7)
+        day_cols = st.columns(5)
         for i, (col, cur_date) in enumerate(zip(day_cols, week_dates)):
-            day_name   = DAYS[i]
+            day_name   = WEEKDAYS_DISPLAY[i]
             is_locked  = platz in get_locked_pitches(cur_date)
             is_today   = cur_date == date.today()
             with col:
@@ -2986,58 +2989,58 @@ def page_anfragen_verwalten() -> None:
     if "anfrage_hide_done" not in st.session_state:
         st.session_state["anfrage_hide_done"] = _qp_bool("aq_hide_done", True)
 
-    st.markdown("### 🔎 Filter & Suche")
-    f1, f2, f3, f4, f5, f6 = st.columns([2.1, 1.1, 1.1, 1.0, 1.3, 0.9])
-    with f1:
-        suchtext = st.text_input(
-            "Suche",
-            placeholder="ID, Team, Betreff, Notiz, Kommentar ...",
-            key="anfrage_suche",
-            label_visibility="collapsed",
-        )
-    with f2:
-        typ_optionen = ["Alle Typen"]
-        if not alle_raw.empty and "anfrage_typ" in alle_raw.columns:
-            typ_optionen += sorted(
-                [t for t in alle_raw["anfrage_typ"].fillna("neu").unique().tolist() if t]
+    with st.expander("🔎 Filter & Suche", expanded=False):
+        f1, f2, f3, f4, f5, f6 = st.columns([2.1, 1.1, 1.1, 1.0, 1.3, 0.9])
+        with f1:
+            suchtext = st.text_input(
+                "Suche",
+                placeholder="ID, Team, Betreff, Notiz, Kommentar ...",
+                key="anfrage_suche",
+                label_visibility="collapsed",
             )
-        if "anfrage_typ_filter" not in st.session_state:
-            st.session_state["anfrage_typ_filter"] = _qp_get("aq_typ", "Alle Typen")
-        if st.session_state["anfrage_typ_filter"] not in typ_optionen:
-            st.session_state["anfrage_typ_filter"] = typ_optionen[0]
-        typ_filter = st.selectbox("Typ", typ_optionen, key="anfrage_typ_filter")
-    with f3:
-        team_optionen = ["Alle Teams"]
-        if not alle_raw.empty:
-            teams = set()
-            if "heimteam" in alle_raw.columns:
-                teams.update([t for t in alle_raw["heimteam"].dropna().tolist() if str(t).strip()])
-            if "erstellt_von" in alle_raw.columns:
-                teams.update([t for t in alle_raw["erstellt_von"].dropna().tolist() if str(t).strip()])
-            team_optionen += sorted(teams)
-        if "anfrage_team_filter" not in st.session_state:
-            st.session_state["anfrage_team_filter"] = _qp_get("aq_team", "Alle Teams")
-        if st.session_state["anfrage_team_filter"] not in team_optionen:
-            st.session_state["anfrage_team_filter"] = team_optionen[0]
-        team_filter = st.selectbox("Team", team_optionen, key="anfrage_team_filter")
-    with f4:
-        nur_notizen = st.toggle("Nur mit Notiz", key="anfrage_notiz_filter")
-    with f5:
-        hide_done = st.toggle("Abgeschlossen ausblenden", key="anfrage_hide_done")
-    with f6:
-        st.write("")
-        if st.button("Reset", key="anfrage_filter_reset", use_container_width=True):
-            st.session_state["anfrage_suche"] = ""
-            st.session_state["anfrage_typ_filter"] = "Alle Typen"
-            st.session_state["anfrage_team_filter"] = "Alle Teams"
-            st.session_state["anfrage_notiz_filter"] = False
-            st.session_state["anfrage_hide_done"] = True
-            st.query_params["aq"] = ""
-            st.query_params["aq_typ"] = "Alle Typen"
-            st.query_params["aq_team"] = "Alle Teams"
-            st.query_params["aq_notiz"] = "0"
-            st.query_params["aq_hide_done"] = "1"
-            st.rerun()
+        with f2:
+            typ_optionen = ["Alle Typen"]
+            if not alle_raw.empty and "anfrage_typ" in alle_raw.columns:
+                typ_optionen += sorted(
+                    [t for t in alle_raw["anfrage_typ"].fillna("neu").unique().tolist() if t]
+                )
+            if "anfrage_typ_filter" not in st.session_state:
+                st.session_state["anfrage_typ_filter"] = _qp_get("aq_typ", "Alle Typen")
+            if st.session_state["anfrage_typ_filter"] not in typ_optionen:
+                st.session_state["anfrage_typ_filter"] = typ_optionen[0]
+            typ_filter = st.selectbox("Typ", typ_optionen, key="anfrage_typ_filter")
+        with f3:
+            team_optionen = ["Alle Teams"]
+            if not alle_raw.empty:
+                teams = set()
+                if "heimteam" in alle_raw.columns:
+                    teams.update([t for t in alle_raw["heimteam"].dropna().tolist() if str(t).strip()])
+                if "erstellt_von" in alle_raw.columns:
+                    teams.update([t for t in alle_raw["erstellt_von"].dropna().tolist() if str(t).strip()])
+                team_optionen += sorted(teams)
+            if "anfrage_team_filter" not in st.session_state:
+                st.session_state["anfrage_team_filter"] = _qp_get("aq_team", "Alle Teams")
+            if st.session_state["anfrage_team_filter"] not in team_optionen:
+                st.session_state["anfrage_team_filter"] = team_optionen[0]
+            team_filter = st.selectbox("Team", team_optionen, key="anfrage_team_filter")
+        with f4:
+            nur_notizen = st.toggle("Nur mit Notiz", key="anfrage_notiz_filter")
+        with f5:
+            hide_done = st.toggle("Abgeschlossen ausblenden", key="anfrage_hide_done")
+        with f6:
+            st.write("")
+            if st.button("Reset", key="anfrage_filter_reset", use_container_width=True):
+                st.session_state["anfrage_suche"] = ""
+                st.session_state["anfrage_typ_filter"] = "Alle Typen"
+                st.session_state["anfrage_team_filter"] = "Alle Teams"
+                st.session_state["anfrage_notiz_filter"] = False
+                st.session_state["anfrage_hide_done"] = True
+                st.query_params["aq"] = ""
+                st.query_params["aq_typ"] = "Alle Typen"
+                st.query_params["aq_team"] = "Alle Teams"
+                st.query_params["aq_notiz"] = "0"
+                st.query_params["aq_hide_done"] = "1"
+                st.rerun()
 
     st.query_params["aq"] = suchtext
     st.query_params["aq_typ"] = typ_filter
@@ -3083,15 +3086,17 @@ def page_anfragen_verwalten() -> None:
     c2.metric("📋 DFBnet offen",  n_dfb)
     c3.metric("✅ Abgeschlossen", n_done)
 
+    tab_neu_label = f"🔴 Neue Anfragen ({n_neu})"
+    tab_dfb_label = f"🔵 DFBnet ausstehend ({n_dfb})"
+    tab_done_label = f"⚪ Abgeschlossen ({n_done})"
+
     if hide_done:
         tab_neu, tab_dfb = st.tabs(
-            [f"⏳ Neue Anfragen ({n_neu})", f"📋 DFBnet ausstehend ({n_dfb})"]
+            [tab_neu_label, tab_dfb_label]
         )
     else:
         tab_neu, tab_dfb, tab_done = st.tabs(
-            [f"⏳ Neue Anfragen ({n_neu})",
-             f"📋 DFBnet ausstehend ({n_dfb})",
-             f"✅ Abgeschlossen ({n_done})"]
+            [tab_neu_label, tab_dfb_label, tab_done_label]
         )
 
     # ─── TAB 1: Neue Anfragen ────────────────────────────────────────────────
@@ -3477,7 +3482,7 @@ def page_anfragen_verwalten() -> None:
             if df_done.empty:
                 st.info("Noch keine abgeschlossenen Vorgänge.")
             else:
-                for _, r in df_done.iterrows():
+                for _, r in df_done.sort_values("bearbeitet_am", ascending=False, na_position="last").iterrows():
                     done_notiz = r.get("verwalter_notiz") or ""
                     notiz_suffix = " 📝" if done_notiz else ""
                     titel  = (
