@@ -2987,7 +2987,7 @@ def page_anfragen_verwalten() -> None:
         st.session_state["anfrage_hide_done"] = _qp_bool("aq_hide_done", True)
 
     st.markdown("### 🔎 Filter & Suche")
-    f1, f2, f3, f4, f5 = st.columns([2.2, 1.1, 1.1, 1.0, 1.3])
+    f1, f2, f3, f4, f5, f6 = st.columns([2.1, 1.1, 1.1, 1.0, 1.3, 0.9])
     with f1:
         suchtext = st.text_input(
             "Suche",
@@ -3024,6 +3024,20 @@ def page_anfragen_verwalten() -> None:
         nur_notizen = st.toggle("Nur mit Notiz", key="anfrage_notiz_filter")
     with f5:
         hide_done = st.toggle("Abgeschlossen ausblenden", key="anfrage_hide_done")
+    with f6:
+        st.write("")
+        if st.button("Reset", key="anfrage_filter_reset", use_container_width=True):
+            st.session_state["anfrage_suche"] = ""
+            st.session_state["anfrage_typ_filter"] = "Alle Typen"
+            st.session_state["anfrage_team_filter"] = "Alle Teams"
+            st.session_state["anfrage_notiz_filter"] = False
+            st.session_state["anfrage_hide_done"] = True
+            st.query_params["aq"] = ""
+            st.query_params["aq_typ"] = "Alle Typen"
+            st.query_params["aq_team"] = "Alle Teams"
+            st.query_params["aq_notiz"] = "0"
+            st.query_params["aq_hide_done"] = "1"
+            st.rerun()
 
     st.query_params["aq"] = suchtext
     st.query_params["aq_typ"] = typ_filter
