@@ -498,6 +498,7 @@ def init_db() -> None:
         "ALTER TABLE spielanfragen ADD COLUMN erstellt_von TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN betreff TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN nachricht TEXT",
+        "ALTER TABLE spielanfragen ADD COLUMN bearbeiter_kommentar TEXT",
     ]:
         try:
             conn.execute(migration)
@@ -516,12 +517,22 @@ def init_db() -> None:
         ("ms_tenant_id",    "common"),
         ("ms_client_secret",""),
         ("ms_redirect_uri", "http://localhost:8501"),
-        ("admin_emails",    ""),
+        ("admin_emails",    "lemke@westfalia-osterwick.de"),
+        ("koordinator_emails", "spielbetrieb@westfalia-osterwick.de"),
     ]
     for key, val in defaults:
         c.execute(
             "INSERT OR IGNORE INTO einstellungen (schluessel, wert) VALUES (?,?)",
             (key, val),
+        )
+    # Bestehende leere Werte für vorkonfigurierte Mail-Adressen setzen
+    for key, val in [
+        ("admin_emails",         "lemke@westfalia-osterwick.de"),
+        ("koordinator_emails",   "spielbetrieb@westfalia-osterwick.de"),
+    ]:
+        c.execute(
+            "UPDATE einstellungen SET wert=? WHERE schluessel=? AND (wert IS NULL OR wert='')",
+            (val, key),
         )
     conn.commit()
     conn.close()
@@ -808,6 +819,14 @@ def ms_role_from_email(email: str) -> tuple[str | None, str]:
     ]
     if email_lower in admin_emails:
         return "admin", ""
+    koordinator_emails_raw = get_setting("koordinator_emails") or ""
+    koordinator_emails = [
+        e.strip().lower()
+        for e in koordinator_emails_raw.replace(",", "\n").splitlines()
+        if e.strip()
+    ]
+    if email_lower in koordinator_emails:
+        return "koordinator", ""
     conn = db_connect()
     row = conn.execute(
         "SELECT team FROM saisonplanung "
@@ -1118,6 +1137,110 @@ def _mail_anfrage_html(
     """
 
 
+def _mail_ablehnung_html(
+    anfrage_id: int,
+    typ: str,
+    heimteam: str,
+    gastteam: str,
+    datum_str: str,
+    uhrzeit: str,
+    platz: str,
+    grund: str,
+) -> str:
+    """E-Mail an Trainer: Anfrage wurde abgelehnt."""
+    typ_labels = {
+        "neu": "Neue Spielanfrage",
+        "aenderung": "Spieländerung",
+        "verlegung": "Spielverlegung",
+        "uhrzeit_aenderung": "Uhrzeitänderung",
+        "stornierung": "Stornierungsantrag",
+        "allgemein": "Freie Anfrage",
+    }
+    typ_label = typ_labels.get(typ, "Anfrage")
+    spiel_block = (
+        f"""
+        <table style="width:100%;border-collapse:collapse;margin:10px 0;">
+          <tr style="background:#fafafa;">
+            <td style="padding:7px;color:#888;width:130px;">Begegnung</td>
+            <td style="padding:7px;font-weight:bold;">{heimteam} vs {gastteam}</td></tr>
+          <tr>
+            <td style="padding:7px;color:#888;">Datum</td>
+            <td style="padding:7px;">{datum_str}</td></tr>
+          <tr style="background:#fafafa;">
+            <td style="padding:7px;color:#888;">Uhrzeit</td>
+            <td style="padding:7px;">{uhrzeit} Uhr</td></tr>
+          <tr>
+            <td style="padding:7px;color:#888;">Platz</td>
+            <td style="padding:7px;">{platz}</td></tr>
+        </table>"""
+        if heimteam or gastteam else ""
+    )
+    return f"""
+    <!DOCTYPE html><html>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:20px;">
+      <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;
+                  overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15);">
+        <div style="background:#ef4444;padding:24px 28px;">
+          <h1 style="margin:0;color:#fff;font-size:22px;">&#10060; Anfrage abgelehnt</h1>
+          <p style="margin:4px 0 0;color:#ffd6d6;font-size:14px;">
+            {typ_label} &middot; Anfrage #{anfrage_id}
+          </p>
+        </div>
+        <div style="padding:24px 28px;">
+          {spiel_block}
+          <div style="background:#fee2e2;border-left:4px solid #ef4444;
+                      padding:14px 16px;border-radius:6px;margin:16px 0;">
+            <b style="color:#7f1d1d;">Ablehnungsgrund:</b>
+            <p style="margin:8px 0 0 0;color:#7f1d1d;font-size:13px;">{grund}</p>
+          </div>
+          <p style="color:#666;font-size:13px;">
+            Bei Fragen bitte direkt beim Spielbetrieb melden.
+          </p>
+        </div>
+        <div style="background:#f0f0f0;padding:14px 28px;font-size:12px;
+                    color:#888;text-align:center;">
+          Automatische Benachrichtigung &middot; FCTM Spielbetrieb-Manager
+        </div>
+      </div>
+    </body></html>
+    """
+
+
+def _mail_antwort_html(
+    anfrage_id: int,
+    team: str,
+    betreff: str,
+    antwort: str,
+) -> str:
+    """E-Mail an Trainer: Antwort auf eine freie Anfrage."""
+    return f"""
+    <!DOCTYPE html><html>
+    <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:20px;">
+      <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;
+                  overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15);">
+        <div style="background:#10b981;padding:24px 28px;">
+          <h1 style="margin:0;color:#fff;font-size:22px;">&#128172; Antwort vom Spielbetrieb</h1>
+          <p style="margin:4px 0 0;color:#d1fae5;font-size:14px;">
+            Anfrage #{anfrage_id} &middot; {team}
+          </p>
+        </div>
+        <div style="padding:24px 28px;">
+          <p style="color:#333;"><b>Betreff Ihrer Anfrage:</b> {betreff}</p>
+          <div style="background:#f0fdf4;border-left:4px solid #10b981;
+                      padding:14px 16px;border-radius:6px;margin:16px 0;">
+            <b style="color:#065f46;">Antwort:</b>
+            <p style="margin:8px 0 0 0;color:#065f46;font-size:13px;white-space:pre-wrap;">{antwort}</p>
+          </div>
+        </div>
+        <div style="background:#f0f0f0;padding:14px 28px;font-size:12px;
+                    color:#888;text-align:center;">
+          Automatische Benachrichtigung &middot; FCTM Spielbetrieb-Manager
+        </div>
+      </div>
+    </body></html>
+    """
+
+
 # ── Spielanfragen ─────────────────────────────────────────────────────────────
 
 def create_spielanfrage(datum, uhrzeit, platz, heimteam, gastteam, kabine="", notizen="", erstellt_von="") -> int:
@@ -1413,12 +1536,12 @@ def get_all_anfragen() -> pd.DataFrame:
     return df
 
 
-def update_anfrage_status(aid: int, status: str, bearbeiter: str) -> None:
+def update_anfrage_status(aid: int, status: str, bearbeiter: str, kommentar: str = "") -> None:
     conn = db_connect()
     conn.execute(
         "UPDATE spielanfragen "
-        "SET status=?, bearbeiter=?, bearbeitet_am=datetime('now') WHERE id=?",
-        (status, bearbeiter, aid),
+        "SET status=?, bearbeiter=?, bearbeitet_am=datetime('now'), bearbeiter_kommentar=? WHERE id=?",
+        (status, bearbeiter, kommentar, aid),
     )
     conn.commit()
     conn.close()
@@ -1815,7 +1938,7 @@ def find_conflicts(df_training: pd.DataFrame, datum: date, uhrzeit: str, platz: 
 def status_badge(status: str) -> str:
     meta = {
         "ausstehend":        ("#f0a500", "⏳", "Ausstehend"),
-        "dfbnet_ausstehend": ("#7c3aed", "📋", "DFBnet offen"),
+        "dfbnet_ausstehend": ("#7c3aed", "✅", "Genehmigt"),
         "abgeschlossen":     ("#22c55e", "✅", "Abgeschlossen"),
         "abgelehnt":         ("#ef4444", "❌", "Abgelehnt"),
         "genehmigt":         ("#22c55e", "✅", "Genehmigt"),
@@ -2425,8 +2548,21 @@ def page_user_anfrage() -> None:
                     f'<div style="display:flex;justify-content:space-between;align-items:center;">'
                     f'<span style="color:#1a1a1a;font-weight:bold;">{titel}</span>'
                     f'<span>{typ_badge(t)}&nbsp;{status_badge(r["status"])}</span></div>'
-                    + detail +
-                    f'</div>',
+                    + detail
+                    + (
+                        f'<div style="background:#fee2e2;border-left:3px solid #ef4444;'
+                        f'padding:6px 10px;border-radius:4px;margin-top:6px;font-size:12px;color:#7f1d1d;">'
+                        f'<b>Ablehnungsgrund:</b> {r["bearbeiter_kommentar"]}</div>'
+                        if r.get("bearbeiter_kommentar") and r["status"] == "abgelehnt"
+                        else (
+                            f'<div style="background:#f0fdf4;border-left:3px solid #10b981;'
+                            f'padding:6px 10px;border-radius:4px;margin-top:6px;font-size:12px;color:#065f46;">'
+                            f'<b>Antwort:</b> {r["bearbeiter_kommentar"]}</div>'
+                            if r.get("bearbeiter_kommentar") and r["status"] == "abgeschlossen"
+                            else ""
+                        )
+                    )
+                    + f'</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -2710,21 +2846,68 @@ def page_anfragen_verwalten() -> None:
                             f'📅 Eingegangen: {r.get("erstellt_am","")}</span>',
                             unsafe_allow_html=True,
                         )
+                        frei_antwort = st.text_area(
+                            "💬 Antwort an Trainer (optional)",
+                            key=f"frei_antwort_{r['id']}",
+                            placeholder="Antwort / Rückmeldung an den Trainer …",
+                            height=100,
+                        )
+                        frei_abl_grund = st.text_input(
+                            "Ablehnungsgrund (bei Ablehnung erforderlich)",
+                            key=f"frei_abl_{r['id']}",
+                            placeholder="Warum wird die Anfrage abgelehnt?",
+                        )
                         ba1, ba2 = st.columns(2)
                         with ba1:
                             if st.button(
                                 "✅ Zur Kenntnis genommen", key=f"ok_{r['id']}",
                                 type="primary", use_container_width=True,
                             ):
-                                update_anfrage_status(r["id"], "abgeschlossen", "Admin")
+                                bearbeiter_name = st.session_state.get("ms_name") or "Admin"
+                                update_anfrage_status(r["id"], "abgeschlossen", bearbeiter_name, kommentar=frei_antwort.strip())
+                                if frei_antwort.strip():
+                                    trainer_email = get_trainer_email_for_team(r.get("erstellt_von", ""))
+                                    if trainer_email:
+                                        antwort_html = _mail_antwort_html(
+                                            r["id"],
+                                            r.get("erstellt_von", ""),
+                                            betreff_txt,
+                                            frei_antwort.strip(),
+                                        )
+                                        ok_a, err_a = send_email(
+                                            f"[FCTM] 💬 Antwort auf Ihre Anfrage #{r['id']}: {betreff_txt[:50]}",
+                                            antwort_html, to=trainer_email,
+                                        )
+                                        if ok_a:
+                                            st.info(f"📧 Antwort-Mail an {trainer_email} gesendet.")
+                                        elif err_a != "E-Mail-Versand nicht aktiviert.":
+                                            st.warning(f"📧 Mail-Fehler: {err_a}")
                                 st.rerun()
                         with ba2:
                             if st.button(
                                 "❌ Ablehnen", key=f"no_{r['id']}",
                                 type="secondary", use_container_width=True,
                             ):
-                                update_anfrage_status(r["id"], "abgelehnt", "Admin")
-                                st.rerun()
+                                if not frei_abl_grund.strip():
+                                    st.error("Bitte einen Ablehnungsgrund eingeben.")
+                                else:
+                                    bearbeiter_name = st.session_state.get("ms_name") or "Admin"
+                                    update_anfrage_status(r["id"], "abgelehnt", bearbeiter_name, kommentar=frei_abl_grund.strip())
+                                    trainer_email = get_trainer_email_for_team(r.get("erstellt_von", ""))
+                                    if trainer_email:
+                                        abl_html = _mail_ablehnung_html(
+                                            r["id"], "allgemein", "", "",
+                                            "", "", "", frei_abl_grund.strip(),
+                                        )
+                                        ok_a, err_a = send_email(
+                                            f"[FCTM] ❌ Anfrage #{r['id']} abgelehnt: {betreff_txt[:50]}",
+                                            abl_html, to=trainer_email,
+                                        )
+                                        if ok_a:
+                                            st.info(f"📧 Ablehnungs-Mail an {trainer_email} gesendet.")
+                                        elif err_a != "E-Mail-Versand nicht aktiviert.":
+                                            st.warning(f"📧 Mail-Fehler: {err_a}")
+                                    st.rerun()
                     continue
 
                 # ─── Spiel-bezogene Anfragen ─────────────────────────────────
@@ -2817,6 +3000,12 @@ def page_anfragen_verwalten() -> None:
                                 key=f"gkg_{r['id']}",
                             )
 
+                    # ── Ablehnungsgrund (vor den Aktions-Buttons) ────────────────────
+                    abl_grund = st.text_input(
+                        "Ablehnungsgrund (bei Ablehnung erforderlich)",
+                        key=f"abl_{r['id']}",
+                        placeholder="z. B. Platzkonflikt, Terminüberschneidung, fehlende Absprache …",
+                    )
                     bc1, bc2 = st.columns(2)
                     with bc1:
                         if st.button(
@@ -2868,8 +3057,30 @@ def page_anfragen_verwalten() -> None:
                             "❌ Ablehnen", key=f"no_{r['id']}",
                             type="secondary", use_container_width=True,
                         ):
-                            update_anfrage_status(r["id"], "abgelehnt", "Admin")
-                            st.rerun()
+                            if not abl_grund.strip():
+                                st.error("Bitte einen Ablehnungsgrund eingeben.")
+                            else:
+                                bearbeiter_name = st.session_state.get("ms_name") or "Admin"
+                                update_anfrage_status(r["id"], "abgelehnt", bearbeiter_name, kommentar=abl_grund.strip())
+                                # Trainer per E-Mail informieren
+                                trainer_email = get_trainer_email_for_team(r["heimteam"])
+                                if trainer_email:
+                                    abl_html = _mail_ablehnung_html(
+                                        r["id"], r.get("anfrage_typ", "neu"),
+                                        r["heimteam"], r["gastteam"],
+                                        r["datum"], r["uhrzeit"], r["platz"],
+                                        abl_grund.strip(),
+                                    )
+                                    ok_a, err_a = send_email(
+                                        f"[FCTM] ❌ Anfrage #{r['id']} abgelehnt: "
+                                        f"{r['heimteam']} vs {r['gastteam']}",
+                                        abl_html, to=trainer_email,
+                                    )
+                                    if ok_a:
+                                        st.info(f"📧 Ablehnungs-Mail an {trainer_email} gesendet.")
+                                    elif err_a != "E-Mail-Versand nicht aktiviert.":
+                                        st.warning(f"📧 Mail-Fehler: {err_a}")
+                                st.rerun()
 
 
     # ─── TAB 2: DFBnet ausstehend ────────────────────────────────────────────
@@ -3156,6 +3367,22 @@ def page_admin_spiel_anlegen() -> None:
         st.info("Noch keine Spiele eingetragen.")
     else:
         all_m["datum_dt"] = pd.to_datetime(all_m["datum"])
+        # ── CSV-Export ────────────────────────────────────────────────────
+        export_df = all_m.sort_values("datum_dt")[
+            ["datum", "uhrzeit", "platz", "heimteam", "gastteam", "kabine", "notizen"]
+        ].rename(columns={
+            "datum": "Datum", "uhrzeit": "Uhrzeit", "platz": "Platz",
+            "heimteam": "Heimteam", "gastteam": "Gastteam",
+            "kabine": "Kabine", "notizen": "Notizen",
+        })
+        st.download_button(
+            label="📥 Spielplan als CSV exportieren",
+            data=export_df.to_csv(index=False, sep=";", encoding="utf-8-sig"),
+            file_name=f"spielplan_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        st.divider()
         for _, m in all_m.sort_values("datum_dt").iterrows():
             dfb_ok = m.get("dfbnet_eingetragen", 1)
             dfb_badge = (
@@ -3769,13 +3996,18 @@ def page_einstellungen() -> None:
             ms_adm  = st.text_area("Admin-E-Mail-Adressen",
                                    value=get_setting("admin_emails"),
                                    placeholder="admin@fctm.de\nvorstand@fctm.de",
-                                   help="Eine Adresse pro Zeile. Diese erhalten Admin-Zugang.")
+                                   help="Eine Adresse pro Zeile. Diese erhalten vollen Admin-Zugang.")
+            ms_kord = st.text_area("Koordinatoren-E-Mail-Adressen",
+                                   value=get_setting("koordinator_emails") or "",
+                                   placeholder="koordinator@fctm.de\nspielausschuss@fctm.de",
+                                   help="Eine Adresse pro Zeile. Koordinatoren sehen Dashboard, Anfragen und Spiel anlegen – aber keine Systemeinstellungen oder Saisonplanung.")
             if st.form_submit_button("💾 Speichern", type="primary"):
                 set_setting("ms_client_id",     ms_cid.strip())
                 set_setting("ms_tenant_id",     ms_tid.strip() or "common")
                 set_setting("ms_client_secret", ms_sec.strip())
                 set_setting("ms_redirect_uri",  ms_ruri.strip())
                 set_setting("admin_emails",     ms_adm.strip())
+                set_setting("koordinator_emails", ms_kord.strip())
                 st.success("✅ Microsoft-Login-Einstellungen gespeichert.")
                 st.rerun()
 
@@ -4112,7 +4344,11 @@ def main() -> None:
         badge_html = (
             '<span class="role-badge-admin">👑 Administrator</span>'
             if role == "admin"
-            else '<span class="role-badge-user">👤 Benutzer</span>'
+            else (
+                '<span class="role-badge-admin" style="background:#7c3aed;">📋 Koordinator</span>'
+                if role == "koordinator"
+                else '<span class="role-badge-user">👤 Benutzer</span>'
+            )
         )
         team_line = (
             f'<br><span style="color:#ffdada;font-size:12px;">⚽ {my_team_sb}</span>'
@@ -4150,6 +4386,18 @@ def main() -> None:
                 "📊 Statistiken",
                 "⚙️ Einstellungen",
             ]
+        elif role == "koordinator":
+            _n_offen = 0
+            if not get_all_anfragen().empty:
+                _anf = get_all_anfragen()
+                _n_offen = len(_anf[_anf["status"].isin(["ausstehend", "dfbnet_ausstehend"])])
+            _anfragen_label = f"📨 Anfragen verwalten {'🔴' if _n_offen > 0 else ''}"
+            options = [
+                "📅 Dashboard",
+                _anfragen_label,
+                "➕ Spiel anlegen",
+                "📋 Trainingsplan",
+            ]
         else:
             options = [
                 "📋 Trainingsplan",
@@ -4173,7 +4421,7 @@ def main() -> None:
             st.session_state.pop("ms_email", None)
             st.session_state.pop("_session_token", None)
             st.rerun()
-        st.caption("Version 2.0.0 · FCTM")
+        st.caption("Version 2.1.0 · FCTM")
 
     # ── Routing ───────────────────────────────────────────────────────────────
     routing = {
