@@ -6,54 +6,36 @@ Rollen: Admin (vollständiger Zugriff) · Benutzer (Anfragen & Trainingsplan)
 """
 
 import io
-import os
 import smtplib
-import sqlite3
 from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import msal
-import secrets
 import pandas as pd
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 
-# ---------------------------------------------------------------------------
-# Konstanten
-# ---------------------------------------------------------------------------
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fctm.db")
-DEFAULT_ADMIN_PIN = "1234"
-
-DAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-WEEKDAYS_DISPLAY = DAYS[:5]
-
-TIME_SLOTS_TRAINING = [f"{h:02d}:{m:02d}" for h in range(8, 22) for m in (0, 30)]
-
-# Platzhälften – nur für Trainingszwecke
-PITCHES = [
-    "Rasen vorne",
-    "Rasen hinten",
-    "Kunstrasen vorne",
-    "Kunstrasen hinten",
-    "Wigger-Arena",
-]
-
-# Gesamtplätze – für Spielansetzungen (immer ganzer Platz)
-PITCHES_SPIEL = [
-    "Rasen",
-    "Kunstrasen",
-    "Wigger-Arena",
-]
-
-# Mapping: Gesamtplatz → Training-Hälften für Konflikt-Erkennung
-PITCH_HALVES: dict[str, list[str]] = {
-    "Rasen":      ["Rasen vorne",      "Rasen hinten"],
-    "Kunstrasen": ["Kunstrasen vorne", "Kunstrasen hinten"],
-    "Wigger-Arena": ["Wigger-Arena"],
-}
-
-LOCKER_ROOMS = [f"Kabine {i}" for i in range(1, 7)]  # 6 Kabinen
+from fctm_core.constants import (
+    DAYS,
+    LOCKER_ROOMS,
+    PITCHES,
+    PITCHES_SPIEL,
+    PITCH_HALVES,
+    TIME_SLOTS_TRAINING,
+    WEEKDAYS_DISPLAY,
+)
+from fctm_core.storage import (
+    _COOKIE_MAX_AGE,
+    _COOKIE_NAME,
+    db_connect,
+    get_setting,
+    init_db,
+    session_delete,
+    session_load,
+    session_save,
+    set_setting,
+)
 
 # ---------------------------------------------------------------------------
 # CSS – Vereinsfarben Rot & Weiß (Light-Mode, analog Kursanmeldung)
@@ -409,171 +391,6 @@ div.stAlert > div[data-baseweb="notification"][kind="info"] {
 </style>
 """
 
-# ---------------------------------------------------------------------------
-# Datenbank
-# ---------------------------------------------------------------------------
-
-def db_connect() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
-def init_db() -> None:
-    conn = db_connect()
-    c = conn.cursor()
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS einstellungen (
-            schluessel TEXT PRIMARY KEY,
-            wert       TEXT
-        );
-        CREATE TABLE IF NOT EXISTS spiele (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            datum         TEXT NOT NULL,
-            uhrzeit       TEXT NOT NULL,
-            platz         TEXT NOT NULL,
-            heimteam      TEXT,
-            gastteam      TEXT,
-            kabine        TEXT,
-            notizen       TEXT,
-            quelle        TEXT DEFAULT 'manuell',
-            ursprung_anfrage_id INTEGER,
-            erstellt_am   TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS spielanfragen (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            datum         TEXT NOT NULL,
-            uhrzeit       TEXT NOT NULL,
-            platz         TEXT NOT NULL,
-            heimteam      TEXT,
-            gastteam      TEXT,
-            kabine        TEXT,
-            notizen       TEXT,
-            status        TEXT DEFAULT 'ausstehend',
-            bearbeiter    TEXT,
-            erstellt_am   TEXT DEFAULT CURRENT_TIMESTAMP,
-            bearbeitet_am TEXT
-        );
-        CREATE TABLE IF NOT EXISTS anfrage_notizen (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            anfrage_id  INTEGER NOT NULL,
-            notiz       TEXT NOT NULL,
-            erstellt_von TEXT,
-            erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (anfrage_id) REFERENCES spielanfragen(id)
-        );
-        CREATE TABLE IF NOT EXISTS platz_sperren (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            platz    TEXT NOT NULL,
-            datum    TEXT NOT NULL,
-            grund    TEXT,
-            gesperrt INTEGER DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS training_ausfaelle (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            team     TEXT NOT NULL,
-            datum    TEXT NOT NULL,
-            uhrzeit  TEXT NOT NULL,
-            platz    TEXT NOT NULL,
-            spiel_id INTEGER,
-            FOREIGN KEY (spiel_id) REFERENCES spiele(id)
-        );
-        CREATE TABLE IF NOT EXISTS saisonplanung (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            team          TEXT NOT NULL,
-            platz         TEXT NOT NULL,
-            tag           TEXT NOT NULL,
-            zeit          TEXT NOT NULL,
-            kabine        TEXT,
-            trainer_email TEXT,
-            saison        TEXT
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token      TEXT PRIMARY KEY,
-            role       TEXT NOT NULL,
-            team       TEXT,
-            ms_name    TEXT,
-            ms_email   TEXT,
-            erstellt   TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    # Migrationen für bestehende DBs
-    for migration in [
-        "ALTER TABLE spiele ADD COLUMN dfbnet_eingetragen INTEGER DEFAULT 0",
-        "ALTER TABLE spiele ADD COLUMN quelle TEXT DEFAULT 'manuell'",
-        "ALTER TABLE spiele ADD COLUMN ursprung_anfrage_id INTEGER",
-        "ALTER TABLE saisonplanung ADD COLUMN trainer_email TEXT",
-        "ALTER TABLE saisonplanung ADD COLUMN zeit_ende TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN anfrage_typ TEXT DEFAULT 'neu'",
-        "ALTER TABLE spielanfragen ADD COLUMN spiel_id INTEGER",
-        "ALTER TABLE spielanfragen ADD COLUMN neue_uhrzeit TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN neues_datum TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN neuer_platz TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN neue_kabine TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN erstellt_von TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN betreff TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN nachricht TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN bearbeiter_kommentar TEXT",
-        "ALTER TABLE spielanfragen ADD COLUMN verwalter_notiz TEXT",
-    ]:
-        try:
-            conn.execute(migration)
-        except sqlite3.OperationalError:
-            pass  # Spalte existiert bereits
-    defaults = [
-        ("admin_pin",       DEFAULT_ADMIN_PIN),
-        ("email_aktiv",     "0"),
-        ("email_smtp_host", ""),
-        ("email_smtp_port", "587"),
-        ("email_smtp_user", ""),
-        ("email_smtp_pass", ""),
-        ("email_absender",  ""),
-        ("email_empfaenger",""),
-        ("ms_client_id",    ""),
-        ("ms_tenant_id",    "common"),
-        ("ms_client_secret",""),
-        ("ms_redirect_uri", "http://localhost:8501"),
-        ("admin_emails",    "lemke@westfalia-osterwick.de"),
-        ("koordinator_emails", "spielbetrieb@westfalia-osterwick.de"),
-        ("verwalter_notizen",  ""),
-    ]
-    for key, val in defaults:
-        c.execute(
-            "INSERT OR IGNORE INTO einstellungen (schluessel, wert) VALUES (?,?)",
-            (key, val),
-        )
-    # Bestehende leere Werte für vorkonfigurierte Mail-Adressen setzen
-    for key, val in [
-        ("admin_emails",         "lemke@westfalia-osterwick.de"),
-        ("koordinator_emails",   "spielbetrieb@westfalia-osterwick.de"),
-    ]:
-        c.execute(
-            "UPDATE einstellungen SET wert=? WHERE schluessel=? AND (wert IS NULL OR wert='')",
-            (val, key),
-        )
-    conn.commit()
-    conn.close()
-
-
-# ── Einstellungen ─────────────────────────────────────────────────────────────
-
-def get_setting(key: str) -> str | None:
-    conn = db_connect()
-    row = conn.execute(
-        "SELECT wert FROM einstellungen WHERE schluessel=?", (key,)
-    ).fetchone()
-    conn.close()
-    return row[0] if row else None
-
-
-def set_setting(key: str, value: str) -> None:
-    conn = db_connect()
-    conn.execute(
-        "INSERT OR REPLACE INTO einstellungen (schluessel, wert) VALUES (?,?)",
-        (key, value),
-    )
-    conn.commit()
-    conn.close()
-
-
 # ── Spiele ────────────────────────────────────────────────────────────────────
 
 def save_match(
@@ -651,53 +468,6 @@ def _email_cfg() -> dict:
     ).fetchall()
     conn.close()
     return {r[0]: r[1] for r in rows}
-
-
-# ---------------------------------------------------------------------------
-# Session-Persistenz (Cookie + SQLite)
-# ---------------------------------------------------------------------------
-
-_COOKIE_NAME = "fctm_session"
-_COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 Tage
-
-
-def session_save(role: str, team: str, ms_name: str, ms_email: str) -> str:
-    """Speichert Session in DB, gibt Token zurück."""
-    token = secrets.token_urlsafe(32)
-    conn = db_connect()
-    conn.execute(
-        "INSERT INTO sessions (token, role, team, ms_name, ms_email) VALUES (?,?,?,?,?)",
-        (token, role, team or "", ms_name or "", ms_email or ""),
-    )
-    conn.commit()
-    conn.close()
-    return token
-
-
-def session_load(token: str) -> dict | None:
-    """Lädt Session aus DB. None wenn nicht gefunden oder abgelaufen (>7 Tage)."""
-    if not token:
-        return None
-    conn = db_connect()
-    row = conn.execute(
-        "SELECT role, team, ms_name, ms_email FROM sessions "
-        "WHERE token=? AND erstellt > datetime('now','-7 days')",
-        (token,),
-    ).fetchone()
-    conn.close()
-    if row:
-        return {"role": row[0], "team": row[1], "ms_name": row[2], "ms_email": row[3]}
-    return None
-
-
-def session_delete(token: str) -> None:
-    """Löscht Session aus DB."""
-    if not token:
-        return
-    conn = db_connect()
-    conn.execute("DELETE FROM sessions WHERE token=?", (token,))
-    conn.commit()
-    conn.close()
 
 
 def _graph_send(betreff: str, html_body: str, absender: str, empfaenger: list[str]) -> tuple[bool, str]:
