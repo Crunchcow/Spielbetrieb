@@ -1546,14 +1546,22 @@ def get_all_anfragen() -> pd.DataFrame:
     return df
 
 
-def get_anfrage_notizen(anfrage_id: int, limit: int = 12) -> pd.DataFrame:
+def get_anfrage_notizen(anfrage_id: int, limit: int | None = 5) -> pd.DataFrame:
     conn = db_connect()
-    df = pd.read_sql(
-        "SELECT notiz, erstellt_von, erstellt_am FROM anfrage_notizen "
-        "WHERE anfrage_id=? ORDER BY id DESC LIMIT ?",
-        conn,
-        params=(anfrage_id, limit),
-    )
+    if limit is None:
+        df = pd.read_sql(
+            "SELECT notiz, erstellt_von, erstellt_am FROM anfrage_notizen "
+            "WHERE anfrage_id=? ORDER BY id DESC",
+            conn,
+            params=(anfrage_id,),
+        )
+    else:
+        df = pd.read_sql(
+            "SELECT notiz, erstellt_von, erstellt_am FROM anfrage_notizen "
+            "WHERE anfrage_id=? ORDER BY id DESC LIMIT ?",
+            conn,
+            params=(anfrage_id, limit),
+        )
     conn.close()
     return df
 
@@ -1658,7 +1666,23 @@ def _render_verwalter_notizblock(r: pd.Series, key_prefix: str) -> None:
             st.rerun()
 
     with st.expander("🕒 Notizverlauf", expanded=False):
-        hist = get_anfrage_notizen(int(r["id"]))
+        show_all_key = f"{key_prefix}_showall_{r['id']}"
+        if show_all_key not in st.session_state:
+            st.session_state[show_all_key] = False
+        show_all = st.session_state[show_all_key]
+
+        c_hist1, c_hist2 = st.columns([3, 1])
+        with c_hist2:
+            if show_all:
+                if st.button("Nur letzte 5", key=f"{key_prefix}_hist_less_{r['id']}"):
+                    st.session_state[show_all_key] = False
+                    st.rerun()
+            else:
+                if st.button("Alle anzeigen", key=f"{key_prefix}_hist_all_{r['id']}"):
+                    st.session_state[show_all_key] = True
+                    st.rerun()
+
+        hist = get_anfrage_notizen(int(r["id"]), limit=None if show_all else 5)
         if hist.empty:
             st.caption("Noch keine Notiz-Historie vorhanden.")
         else:
@@ -2945,8 +2969,25 @@ def page_anfragen_verwalten() -> None:
     alle_raw    = get_all_anfragen()
     df_training = st.session_state.get("training_df", pd.DataFrame())
 
+    def _qp_get(key: str, default: str) -> str:
+        raw = st.query_params.get(key, default)
+        if isinstance(raw, list):
+            return str(raw[0]) if raw else default
+        return str(raw)
+
+    def _qp_bool(key: str, default: bool) -> bool:
+        raw = _qp_get(key, "1" if default else "0").strip().lower()
+        return raw in ("1", "true", "ja", "yes", "on")
+
+    if "anfrage_suche" not in st.session_state:
+        st.session_state["anfrage_suche"] = _qp_get("aq", "")
+    if "anfrage_notiz_filter" not in st.session_state:
+        st.session_state["anfrage_notiz_filter"] = _qp_bool("aq_notiz", False)
+    if "anfrage_hide_done" not in st.session_state:
+        st.session_state["anfrage_hide_done"] = _qp_bool("aq_hide_done", True)
+
     st.markdown("### 🔎 Filter & Suche")
-    f1, f2, f3, f4 = st.columns([2.2, 1.1, 1.1, 1.0])
+    f1, f2, f3, f4, f5 = st.columns([2.2, 1.1, 1.1, 1.0, 1.3])
     with f1:
         suchtext = st.text_input(
             "Suche",
@@ -2960,6 +3001,10 @@ def page_anfragen_verwalten() -> None:
             typ_optionen += sorted(
                 [t for t in alle_raw["anfrage_typ"].fillna("neu").unique().tolist() if t]
             )
+        if "anfrage_typ_filter" not in st.session_state:
+            st.session_state["anfrage_typ_filter"] = _qp_get("aq_typ", "Alle Typen")
+        if st.session_state["anfrage_typ_filter"] not in typ_optionen:
+            st.session_state["anfrage_typ_filter"] = typ_optionen[0]
         typ_filter = st.selectbox("Typ", typ_optionen, key="anfrage_typ_filter")
     with f3:
         team_optionen = ["Alle Teams"]
@@ -2970,9 +3015,21 @@ def page_anfragen_verwalten() -> None:
             if "erstellt_von" in alle_raw.columns:
                 teams.update([t for t in alle_raw["erstellt_von"].dropna().tolist() if str(t).strip()])
             team_optionen += sorted(teams)
+        if "anfrage_team_filter" not in st.session_state:
+            st.session_state["anfrage_team_filter"] = _qp_get("aq_team", "Alle Teams")
+        if st.session_state["anfrage_team_filter"] not in team_optionen:
+            st.session_state["anfrage_team_filter"] = team_optionen[0]
         team_filter = st.selectbox("Team", team_optionen, key="anfrage_team_filter")
     with f4:
-        nur_notizen = st.toggle("Nur mit Notiz", value=False, key="anfrage_notiz_filter")
+        nur_notizen = st.toggle("Nur mit Notiz", key="anfrage_notiz_filter")
+    with f5:
+        hide_done = st.toggle("Abgeschlossen ausblenden", key="anfrage_hide_done")
+
+    st.query_params["aq"] = suchtext
+    st.query_params["aq_typ"] = typ_filter
+    st.query_params["aq_team"] = team_filter
+    st.query_params["aq_notiz"] = "1" if nur_notizen else "0"
+    st.query_params["aq_hide_done"] = "1" if hide_done else "0"
 
     alle = alle_raw.copy()
     if not alle.empty and typ_filter != "Alle Typen" and "anfrage_typ" in alle.columns:
@@ -3012,11 +3069,16 @@ def page_anfragen_verwalten() -> None:
     c2.metric("📋 DFBnet offen",  n_dfb)
     c3.metric("✅ Abgeschlossen", n_done)
 
-    tab_neu, tab_dfb, tab_done = st.tabs(
-        [f"⏳ Neue Anfragen ({n_neu})",
-         f"📋 DFBnet ausstehend ({n_dfb})",
-         f"✅ Abgeschlossen ({n_done})"]
-    )
+    if hide_done:
+        tab_neu, tab_dfb = st.tabs(
+            [f"⏳ Neue Anfragen ({n_neu})", f"📋 DFBnet ausstehend ({n_dfb})"]
+        )
+    else:
+        tab_neu, tab_dfb, tab_done = st.tabs(
+            [f"⏳ Neue Anfragen ({n_neu})",
+             f"📋 DFBnet ausstehend ({n_dfb})",
+             f"✅ Abgeschlossen ({n_done})"]
+        )
 
     # ─── TAB 1: Neue Anfragen ────────────────────────────────────────────────
     with tab_neu:
@@ -3392,25 +3454,26 @@ def page_anfragen_verwalten() -> None:
                         st.rerun()
 
     # ─── TAB 3: Abgeschlossen / Abgelehnt ───────────────────────────────────
-    with tab_done:
-        df_done = (
-            alle[alle["status"].isin(["abgeschlossen", "abgelehnt", "genehmigt"])]
-            if not alle.empty else pd.DataFrame()
-        )
-        if df_done.empty:
-            st.info("Noch keine abgeschlossenen Vorgänge.")
-        else:
-            for _, r in df_done.iterrows():
-                done_notiz = r.get("verwalter_notiz") or ""
-                notiz_suffix = " 📝" if done_notiz else ""
-                titel  = (
-                    f"#{r['id']} – {r.get('heimteam','?')} vs {r.get('gastteam','?')}  |  "
-                    f"{r.get('datum','')} {r.get('uhrzeit','')}  |  "
-                    f"[{r.get('status','').upper()}]{notiz_suffix}"
-                )
-                with st.expander(titel, expanded=False):
-                    st.markdown(_anfrage_card_html(r), unsafe_allow_html=True)
-                    _render_verwalter_notizblock(r, key_prefix="done")
+    if not hide_done:
+        with tab_done:
+            df_done = (
+                alle[alle["status"].isin(["abgeschlossen", "abgelehnt", "genehmigt"])]
+                if not alle.empty else pd.DataFrame()
+            )
+            if df_done.empty:
+                st.info("Noch keine abgeschlossenen Vorgänge.")
+            else:
+                for _, r in df_done.iterrows():
+                    done_notiz = r.get("verwalter_notiz") or ""
+                    notiz_suffix = " 📝" if done_notiz else ""
+                    titel  = (
+                        f"#{r['id']} – {r.get('heimteam','?')} vs {r.get('gastteam','?')}  |  "
+                        f"{r.get('datum','')} {r.get('uhrzeit','')}  |  "
+                        f"[{r.get('status','').upper()}]{notiz_suffix}"
+                    )
+                    with st.expander(titel, expanded=False):
+                        st.markdown(_anfrage_card_html(r), unsafe_allow_html=True)
+                        _render_verwalter_notizblock(r, key_prefix="done")
 
 
 def page_admin_spiel_anlegen() -> None:
