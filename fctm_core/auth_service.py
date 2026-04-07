@@ -59,24 +59,44 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
 
 
 def oidc_role_from_claims(claims: dict) -> tuple[str | None, str]:
-    """Liest Rolle und Team aus ClubAuth-UserInfo-Claims."""
+    """Liest Rolle und Team aus ClubAuth-UserInfo-Claims.
+
+    ClubAuth liefert:
+        claims["roles"]["spielbetrieb"] = {"role": "benutzer", "team": "1. Herren"}
+    Oder (Legacy-Format falls kein Team hinterlegt):
+        claims["roles"]["spielbetrieb"] = {"role": "koordinator"}
+    """
     roles: dict = claims.get("roles") or {}
-    role = roles.get("spielbetrieb")
-    if role in ("admin", "koordinator", "benutzer"):
-        # Team aus lokalem Saisonplan ergänzen (falls vorhanden)
+    app_data = roles.get("spielbetrieb")
+
+    if not app_data:
+        return None, ""
+
+    # Neues Format: dict mit role + optionalem team
+    if isinstance(app_data, dict):
+        role = app_data.get("role")
+        team = app_data.get("team", "")
+    else:
+        # Altes Format (plain string) — Abwärtskompatibilität
+        role = app_data
         team = ""
-        if role == "benutzer":
-            email = (claims.get("email") or "").lower().strip()
-            conn = db_connect()
-            row = conn.execute(
-                "SELECT team FROM saisonplanung "
-                "WHERE LOWER(trainer_email)=? AND team IS NOT NULL AND team != '' LIMIT 1",
-                (email,),
-            ).fetchone()
-            conn.close()
-            team = row[0] if row else ""
-        return role, team
-    return None, ""
+
+    if role not in ("admin", "koordinator", "benutzer"):
+        return None, ""
+
+    # Kein Team im Token? Fallback: Saisonplan-Tabelle per E-Mail durchsuchen
+    if role == "benutzer" and not team:
+        email = (claims.get("email") or "").lower().strip()
+        conn = db_connect()
+        row = conn.execute(
+            "SELECT team FROM saisonplanung "
+            "WHERE LOWER(trainer_email)=? AND team IS NOT NULL AND team != '' LIMIT 1",
+            (email,),
+        ).fetchone()
+        conn.close()
+        team = row[0] if row else ""
+
+    return role, team
 
 
 # ---------------------------------------------------------------------------
