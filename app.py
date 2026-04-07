@@ -449,6 +449,14 @@ def init_db() -> None:
             erstellt_am   TEXT DEFAULT CURRENT_TIMESTAMP,
             bearbeitet_am TEXT
         );
+        CREATE TABLE IF NOT EXISTS anfrage_notizen (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            anfrage_id  INTEGER NOT NULL,
+            notiz       TEXT NOT NULL,
+            erstellt_von TEXT,
+            erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (anfrage_id) REFERENCES spielanfragen(id)
+        );
         CREATE TABLE IF NOT EXISTS platz_sperren (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             platz    TEXT NOT NULL,
@@ -1538,14 +1546,131 @@ def get_all_anfragen() -> pd.DataFrame:
     return df
 
 
-def save_anfrage_notiz(anfrage_id: int, notiz: str) -> None:
+def get_anfrage_notizen(anfrage_id: int, limit: int = 12) -> pd.DataFrame:
     conn = db_connect()
+    df = pd.read_sql(
+        "SELECT notiz, erstellt_von, erstellt_am FROM anfrage_notizen "
+        "WHERE anfrage_id=? ORDER BY id DESC LIMIT ?",
+        conn,
+        params=(anfrage_id, limit),
+    )
+    conn.close()
+    return df
+
+
+def save_anfrage_notiz(anfrage_id: int, notiz: str, autor: str = "Admin") -> None:
+    clean = (notiz or "").strip()
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT verwalter_notiz FROM spielanfragen WHERE id=?",
+        (anfrage_id,),
+    ).fetchone()
+    prev = (row[0] if row and row[0] else "").strip()
+
+    if clean == prev:
+        conn.close()
+        return
+
     conn.execute(
         "UPDATE spielanfragen SET verwalter_notiz=? WHERE id=?",
-        (notiz, anfrage_id),
+        (clean, anfrage_id),
+    )
+    conn.execute(
+        "INSERT INTO anfrage_notizen (anfrage_id, notiz, erstellt_von) VALUES (?,?,?)",
+        (anfrage_id, clean if clean else "[Notiz entfernt]", autor),
     )
     conn.commit()
     conn.close()
+
+
+def _anfrage_timeline_html(anfrage_typ: str, status: str) -> str:
+    if anfrage_typ == "allgemein":
+        steps = ["Eingang", "In Bearbeitung", "Antwort"]
+        state_map = {
+            "ausstehend": ["done", "active", "todo"],
+            "dfbnet_ausstehend": ["done", "active", "todo"],
+            "abgeschlossen": ["done", "done", "done"],
+            "genehmigt": ["done", "done", "done"],
+            "abgelehnt": ["done", "done", "rejected"],
+        }
+    else:
+        steps = ["Eingang", "Pruefung", "DFBnet", "Erledigt"]
+        state_map = {
+            "ausstehend": ["done", "active", "todo", "todo"],
+            "dfbnet_ausstehend": ["done", "done", "active", "todo"],
+            "abgeschlossen": ["done", "done", "done", "done"],
+            "genehmigt": ["done", "done", "done", "done"],
+            "abgelehnt": ["done", "done", "todo", "rejected"],
+        }
+
+    states = state_map.get(status, ["done", "active", "todo", "todo"])
+    icon = {
+        "done": "✅",
+        "active": "🟡",
+        "todo": "⚪",
+        "rejected": "❌",
+    }
+    color = {
+        "done": "#065f46",
+        "active": "#92400e",
+        "todo": "#6b7280",
+        "rejected": "#991b1b",
+    }
+
+    parts = []
+    for idx, label in enumerate(steps):
+        stt = states[idx] if idx < len(states) else "todo"
+        parts.append(
+            f'<span style="color:{color[stt]};font-size:12px;white-space:nowrap;">'
+            f'{icon[stt]} {label}</span>'
+        )
+
+    connector = '<span style="color:#9ca3af;">→</span>'
+    return (
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">'
+        + connector.join(parts)
+        + "</div>"
+    )
+
+
+def _render_verwalter_notizblock(r: pd.Series, key_prefix: str) -> None:
+    cur_notiz = r.get("verwalter_notiz") or ""
+    n1, n2 = st.columns([5, 1])
+    with n1:
+        neue_notiz = st.text_area(
+            "📝 Interne Notiz (nur für Verwalter)",
+            value=cur_notiz,
+            key=f"{key_prefix}_notiz_{r['id']}",
+            placeholder="Rücksprachen, offene Punkte, interne Hinweise ...",
+            height=80,
+        )
+    with n2:
+        st.write("")
+        st.write("")
+        if st.button("💾", key=f"{key_prefix}_save_{r['id']}", help="Notiz speichern"):
+            bearbeiter_name = (
+                st.session_state.get("ms_name")
+                or st.session_state.get("ms_email")
+                or "Admin"
+            )
+            save_anfrage_notiz(int(r["id"]), neue_notiz, autor=bearbeiter_name)
+            st.success("Notiz gespeichert.")
+            st.rerun()
+
+    with st.expander("🕒 Notizverlauf", expanded=False):
+        hist = get_anfrage_notizen(int(r["id"]))
+        if hist.empty:
+            st.caption("Noch keine Notiz-Historie vorhanden.")
+        else:
+            for _, hr in hist.iterrows():
+                von = hr.get("erstellt_von") or "System"
+                zeit = hr.get("erstellt_am") or ""
+                txt = hr.get("notiz") or ""
+                st.markdown(
+                    f"• **{zeit}** · {von}<br>"
+                    f"<span style='color:#374151;'>{txt}</span>",
+                    unsafe_allow_html=True,
+                )
 
 
 def update_anfrage_status(aid: int, status: str, bearbeiter: str, kommentar: str = "") -> None:
@@ -2555,12 +2680,14 @@ def page_user_anfrage() -> None:
                         f' &nbsp;|&nbsp; 🏟️ {r["platz"]}'
                         f'{kabine_info}</div>'
                     )
+                timeline_html = _anfrage_timeline_html(t, r.get("status", "ausstehend"))
                 st.markdown(
                     f'<div class="anfrage-card">'
                     f'<div style="display:flex;justify-content:space-between;align-items:center;">'
                     f'<span style="color:#1a1a1a;font-weight:bold;">{titel}</span>'
                     f'<span>{typ_badge(t)}&nbsp;{status_badge(r["status"])}</span></div>'
                     + detail
+                    + timeline_html
                     + (
                         f'<div style="background:#fee2e2;border-left:3px solid #ef4444;'
                         f'padding:6px 10px;border-radius:4px;margin-top:6px;font-size:12px;color:#7f1d1d;">'
@@ -2815,8 +2942,63 @@ def page_anfragen_verwalten() -> None:
         unsafe_allow_html=True,
     )
 
-    alle        = get_all_anfragen()
+    alle_raw    = get_all_anfragen()
     df_training = st.session_state.get("training_df", pd.DataFrame())
+
+    st.markdown("### 🔎 Filter & Suche")
+    f1, f2, f3, f4 = st.columns([2.2, 1.1, 1.1, 1.0])
+    with f1:
+        suchtext = st.text_input(
+            "Suche",
+            placeholder="ID, Team, Betreff, Notiz, Kommentar ...",
+            key="anfrage_suche",
+            label_visibility="collapsed",
+        )
+    with f2:
+        typ_optionen = ["Alle Typen"]
+        if not alle_raw.empty and "anfrage_typ" in alle_raw.columns:
+            typ_optionen += sorted(
+                [t for t in alle_raw["anfrage_typ"].fillna("neu").unique().tolist() if t]
+            )
+        typ_filter = st.selectbox("Typ", typ_optionen, key="anfrage_typ_filter")
+    with f3:
+        team_optionen = ["Alle Teams"]
+        if not alle_raw.empty:
+            teams = set()
+            if "heimteam" in alle_raw.columns:
+                teams.update([t for t in alle_raw["heimteam"].dropna().tolist() if str(t).strip()])
+            if "erstellt_von" in alle_raw.columns:
+                teams.update([t for t in alle_raw["erstellt_von"].dropna().tolist() if str(t).strip()])
+            team_optionen += sorted(teams)
+        team_filter = st.selectbox("Team", team_optionen, key="anfrage_team_filter")
+    with f4:
+        nur_notizen = st.toggle("Nur mit Notiz", value=False, key="anfrage_notiz_filter")
+
+    alle = alle_raw.copy()
+    if not alle.empty and typ_filter != "Alle Typen" and "anfrage_typ" in alle.columns:
+        alle = alle[alle["anfrage_typ"].fillna("neu") == typ_filter]
+    if not alle.empty and team_filter != "Alle Teams":
+        team_mask = pd.Series(False, index=alle.index)
+        if "heimteam" in alle.columns:
+            team_mask = team_mask | (alle["heimteam"].fillna("") == team_filter)
+        if "erstellt_von" in alle.columns:
+            team_mask = team_mask | (alle["erstellt_von"].fillna("") == team_filter)
+        alle = alle[team_mask]
+    if not alle.empty and nur_notizen and "verwalter_notiz" in alle.columns:
+        alle = alle[alle["verwalter_notiz"].fillna("").str.strip() != ""]
+    if not alle.empty and suchtext.strip():
+        q = suchtext.strip().lower()
+        cols = [
+            "id", "heimteam", "gastteam", "status", "anfrage_typ", "erstellt_von",
+            "betreff", "nachricht", "notizen", "verwalter_notiz", "bearbeiter_kommentar",
+        ]
+        nutz_cols = [c for c in cols if c in alle.columns]
+        if nutz_cols:
+            hay = alle[nutz_cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower()
+            alle = alle[hay.str.contains(q, regex=False)]
+
+    if not alle_raw.empty and len(alle) != len(alle_raw):
+        st.caption(f"Filter aktiv: {len(alle)} von {len(alle_raw)} Vorgängen sichtbar.")
 
     if alle.empty:
         n_neu = n_dfb = n_done = 0
@@ -2875,25 +3057,7 @@ def page_anfragen_verwalten() -> None:
                             f'📅 Eingegangen: {r.get("erstellt_am","")}</span>',
                             unsafe_allow_html=True,
                         )
-                        n_key = f"notiz_{r['id']}"
-                        cur_notiz = r.get("verwalter_notiz") or ""
-                        nc1, nc2 = st.columns([5, 1])
-                        with nc1:
-                            neue_notiz = st.text_area(
-                                "📝 Interne Notiz (nur für Verwalter)",
-                                value=cur_notiz,
-                                key=n_key,
-                                placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
-                                height=80,
-                                label_visibility="visible",
-                            )
-                        with nc2:
-                            st.write("")
-                            st.write("")
-                            if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
-                                save_anfrage_notiz(r["id"], neue_notiz.strip())
-                                st.success("Notiz gespeichert.")
-                                st.rerun()
+                        _render_verwalter_notizblock(r, key_prefix="neu_frei")
                         frei_antwort = st.text_area(
                             "💬 Antwort an Trainer (optional)",
                             key=f"frei_antwort_{r['id']}",
@@ -3019,25 +3183,7 @@ def page_anfragen_verwalten() -> None:
                     if r.get("notizen"):
                         st.markdown(f"*Notiz: {r['notizen']}*")
 
-                    sn_key = f"notiz_{r['id']}"
-                    cur_notiz_s = r.get("verwalter_notiz") or ""
-                    sn1, sn2 = st.columns([5, 1])
-                    with sn1:
-                        neue_notiz_s = st.text_area(
-                            "📝 Interne Notiz (nur für Verwalter)",
-                            value=cur_notiz_s,
-                            key=sn_key,
-                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
-                            height=80,
-                            label_visibility="visible",
-                        )
-                    with sn2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
-                            save_anfrage_notiz(r["id"], neue_notiz_s.strip())
-                            st.success("Notiz gespeichert.")
-                            st.rerun()
+                    _render_verwalter_notizblock(r, key_prefix="neu_spiel")
 
                     if locked:
                         st.error(f"🚫 Platz **{r['platz']}** ist gesperrt!")
@@ -3179,25 +3325,7 @@ def page_anfragen_verwalten() -> None:
                     if r.get("notizen"):
                         st.markdown(f"*Notiz: {r['notizen']}*")
 
-                    dn_key = f"notiz_{r['id']}"
-                    cur_notiz_d = r.get("verwalter_notiz") or ""
-                    dn1, dn2 = st.columns([5, 1])
-                    with dn1:
-                        neue_notiz_d = st.text_area(
-                            "📝 Interne Notiz (nur für Verwalter)",
-                            value=cur_notiz_d,
-                            key=dn_key,
-                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
-                            height=80,
-                            label_visibility="visible",
-                        )
-                    with dn2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
-                            save_anfrage_notiz(r["id"], neue_notiz_d.strip())
-                            st.success("Notiz gespeichert.")
-                            st.rerun()
+                    _render_verwalter_notizblock(r, key_prefix="dfb")
 
                     # Trainer-E-Mail-Lookup
                     team_mail = get_trainer_email_for_team(r["heimteam"])
@@ -3275,7 +3403,6 @@ def page_anfragen_verwalten() -> None:
             for _, r in df_done.iterrows():
                 done_notiz = r.get("verwalter_notiz") or ""
                 notiz_suffix = " 📝" if done_notiz else ""
-                label  = r.get("anfrage_typ") or "neu"
                 titel  = (
                     f"#{r['id']} – {r.get('heimteam','?')} vs {r.get('gastteam','?')}  |  "
                     f"{r.get('datum','')} {r.get('uhrzeit','')}  |  "
@@ -3283,23 +3410,7 @@ def page_anfragen_verwalten() -> None:
                 )
                 with st.expander(titel, expanded=False):
                     st.markdown(_anfrage_card_html(r), unsafe_allow_html=True)
-                    done_n1, done_n2 = st.columns([5, 1])
-                    with done_n1:
-                        neue_notiz_done = st.text_area(
-                            "📝 Interne Notiz (nur für Verwalter)",
-                            value=done_notiz,
-                            key=f"notiz_{r['id']}",
-                            placeholder="Rücksprachen, offene Punkte, interne Hinweise …",
-                            height=80,
-                            label_visibility="visible",
-                        )
-                    with done_n2:
-                        st.write("")
-                        st.write("")
-                        if st.button("💾", key=f"savnotiz_{r['id']}", help="Notiz speichern"):
-                            save_anfrage_notiz(r["id"], neue_notiz_done.strip())
-                            st.success("Notiz gespeichert.")
-                            st.rerun()
+                    _render_verwalter_notizblock(r, key_prefix="done")
 
 
 def page_admin_spiel_anlegen() -> None:
