@@ -434,6 +434,8 @@ def init_db() -> None:
             gastteam      TEXT,
             kabine        TEXT,
             notizen       TEXT,
+            quelle        TEXT DEFAULT 'manuell',
+            ursprung_anfrage_id INTEGER,
             erstellt_am   TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS spielanfragen (
@@ -496,6 +498,8 @@ def init_db() -> None:
     # Migrationen für bestehende DBs
     for migration in [
         "ALTER TABLE spiele ADD COLUMN dfbnet_eingetragen INTEGER DEFAULT 0",
+        "ALTER TABLE spiele ADD COLUMN quelle TEXT DEFAULT 'manuell'",
+        "ALTER TABLE spiele ADD COLUMN ursprung_anfrage_id INTEGER",
         "ALTER TABLE saisonplanung ADD COLUMN trainer_email TEXT",
         "ALTER TABLE saisonplanung ADD COLUMN zeit_ende TEXT",
         "ALTER TABLE spielanfragen ADD COLUMN anfrage_typ TEXT DEFAULT 'neu'",
@@ -572,13 +576,27 @@ def set_setting(key: str, value: str) -> None:
 
 # ── Spiele ────────────────────────────────────────────────────────────────────
 
-def save_match(datum, uhrzeit, platz, heimteam, gastteam, kabine, notizen, betroffene) -> int:
+def save_match(
+    datum,
+    uhrzeit,
+    platz,
+    heimteam,
+    gastteam,
+    kabine,
+    notizen,
+    betroffene,
+    quelle: str = "manuell",
+    ursprung_anfrage_id: int | None = None,
+) -> int:
     conn = db_connect()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO spiele (datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (datum.isoformat(), uhrzeit, platz, heimteam, gastteam, kabine, notizen),
+        "INSERT INTO spiele (datum,uhrzeit,platz,heimteam,gastteam,kabine,notizen,quelle,ursprung_anfrage_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            datum.isoformat(), uhrzeit, platz, heimteam, gastteam,
+            kabine, notizen, quelle, ursprung_anfrage_id,
+        ),
     )
     sid = c.lastrowid
     for team in betroffene:
@@ -1788,6 +1806,8 @@ def confirm_dfbnet(aid: int) -> int:
                 ziel_kabine,
                 r.get("notizen") or "",
                 [],
+                quelle="automatisch_aus_anfrage",
+                ursprung_anfrage_id=aid,
             )
             conn2 = db_connect()
             conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (sid,))
@@ -1802,6 +1822,8 @@ def confirm_dfbnet(aid: int) -> int:
         date.fromisoformat(r["datum"]), r["uhrzeit"], r["platz"],
         r["heimteam"] or "", r["gastteam"] or "",
         r["kabine"] or "", r["notizen"] or "", [],
+        quelle="aus_anfrage",
+        ursprung_anfrage_id=aid,
     )
     conn2 = db_connect()
     conn2.execute("UPDATE spiele SET dfbnet_eingetragen=1 WHERE id=?", (sid,))
@@ -3694,13 +3716,18 @@ def page_admin_spiel_anlegen() -> None:
         st.info("Noch keine Spiele eingetragen.")
     else:
         all_m["datum_dt"] = pd.to_datetime(all_m["datum"])
+        all_m["herkunft"] = all_m.get("quelle", "manuell").fillna("manuell").map({
+            "manuell": "Manuell angelegt",
+            "aus_anfrage": "Aus Anfrage uebernommen",
+            "automatisch_aus_anfrage": "Automatisch aus DFBnet-Anfrage erzeugt",
+        }).fillna("Manuell angelegt")
         # ── CSV-Export ────────────────────────────────────────────────────
         export_df = all_m.sort_values("datum_dt")[
-            ["datum", "uhrzeit", "platz", "heimteam", "gastteam", "kabine", "notizen"]
+            ["datum", "uhrzeit", "platz", "heimteam", "gastteam", "kabine", "notizen", "herkunft"]
         ].rename(columns={
             "datum": "Datum", "uhrzeit": "Uhrzeit", "platz": "Platz",
             "heimteam": "Heimteam", "gastteam": "Gastteam",
-            "kabine": "Kabine", "notizen": "Notizen",
+            "kabine": "Kabine", "notizen": "Notizen", "herkunft": "Herkunft",
         })
         st.download_button(
             label="📥 Spielplan als CSV exportieren",
@@ -3719,6 +3746,10 @@ def page_admin_spiel_anlegen() -> None:
                 '<span style="background:#7c3aed;color:#fff;padding:1px 7px;'
                 'border-radius:10px;font-size:10px;">📋 DFBnet offen</span>'
             )
+            quelle_badge = {
+                "automatisch_aus_anfrage": '<span style="background:#0f766e;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">🤖 Auto aus Anfrage</span>',
+                "aus_anfrage": '<span style="background:#2563eb;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">📨 Aus Anfrage</span>',
+            }.get(m.get("quelle"), '<span style="background:#6b7280;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">✍️ Manuell</span>')
             with st.expander(
                 f"⚽ #{m['id']} – {m['heimteam']} vs {m['gastteam']}  |  "
                 f"{m['datum_dt'].strftime('%d.%m.%Y')} {m['uhrzeit']}  |  {m['platz']}",
@@ -3729,9 +3760,11 @@ def page_admin_spiel_anlegen() -> None:
                 sc2.markdown(f"**Zeit:** {m['uhrzeit']}")
                 sc3.markdown(f"**Platz:** {m['platz']}")
                 st.markdown(
-                    f"**Kabine:** {m.get('kabine','–')}  &nbsp;  {dfb_badge}",
+                    f"**Kabine:** {m.get('kabine','–')}  &nbsp;  {dfb_badge} &nbsp; {quelle_badge}",
                     unsafe_allow_html=True,
                 )
+                if m.get("ursprung_anfrage_id"):
+                    st.caption(f"Ursprung: Anfrage #{int(m['ursprung_anfrage_id'])}")
 
                 # ── Bearbeiten ────────────────────────────────────────────
                 st.divider()
