@@ -2986,7 +2986,7 @@ def page_anfragen_verwalten() -> None:
                         ziel_uhrzeit = r.get("neue_uhrzeit") or r["uhrzeit"]
                         freie_k_gen  = get_free_kabinen(
                             date.fromisoformat(ziel_datum), ziel_uhrzeit
-                        )
+                        ) if ziel_datum and isinstance(ziel_datum, str) else []
                         gen_kc1, gen_kc2 = st.columns(2)
                         with gen_kc1:
                             gen_kab_h = st.selectbox(
