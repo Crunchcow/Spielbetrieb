@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 
+from fctm_core import auth_service, domain_service, mail_service
 from fctm_core.constants import (
     DAYS,
     LOCKER_ROOMS,
@@ -1939,6 +1940,65 @@ def typ_badge(typ: str) -> str:
         f'border-radius:12px;font-size:11px;font-weight:bold;">{icon} {label}</span>'
     )
 
+
+# ---------------------------------------------------------------------------
+# Service-Bindings (Phase 2 Refactor)
+# ---------------------------------------------------------------------------
+
+# Auth
+_ms_app = auth_service._ms_app
+ms_auth_url = auth_service.ms_auth_url
+ms_exchange_code = auth_service.ms_exchange_code
+ms_role_from_email = auth_service.ms_role_from_email
+
+# Mail + Templates
+_email_cfg = mail_service._email_cfg
+_graph_send = mail_service._graph_send
+send_email = mail_service.send_email
+_mail_trainer_html = mail_service._mail_trainer_html
+_mail_trainer_aenderung_html = mail_service._mail_trainer_aenderung_html
+_mail_trainer_stornierung_html = mail_service._mail_trainer_stornierung_html
+_mail_anfrage_html = mail_service._mail_anfrage_html
+_mail_ablehnung_html = mail_service._mail_ablehnung_html
+_mail_antwort_html = mail_service._mail_antwort_html
+
+# Domain / Datenzugriff
+save_match = domain_service.save_match
+get_all_matches = domain_service.get_all_matches
+get_matches_for_date = domain_service.get_matches_for_date
+delete_match = domain_service.delete_match
+create_spielanfrage = domain_service.create_spielanfrage
+create_anfrage_aenderung = domain_service.create_anfrage_aenderung
+create_anfrage_stornierung = domain_service.create_anfrage_stornierung
+create_anfrage_verlegung = domain_service.create_anfrage_verlegung
+create_anfrage_uhrzeit_aenderung = domain_service.create_anfrage_uhrzeit_aenderung
+create_anfrage_verlegung_direkt = domain_service.create_anfrage_verlegung_direkt
+create_anfrage_uhrzeit_aenderung_direkt = domain_service.create_anfrage_uhrzeit_aenderung_direkt
+create_anfrage_stornierung_direkt = domain_service.create_anfrage_stornierung_direkt
+create_anfrage_allgemein = domain_service.create_anfrage_allgemein
+update_match_details = domain_service.update_match_details
+get_all_anfragen = domain_service.get_all_anfragen
+get_anfrage_notizen = domain_service.get_anfrage_notizen
+save_anfrage_notiz = domain_service.save_anfrage_notiz
+update_anfrage_status = domain_service.update_anfrage_status
+approve_anfrage = domain_service.approve_anfrage
+confirm_dfbnet = domain_service.confirm_dfbnet
+get_trainer_email_for_team = domain_service.get_trainer_email_for_team
+get_all_anfragen_dfbnet = domain_service.get_all_anfragen_dfbnet
+toggle_pitch_lock = domain_service.toggle_pitch_lock
+get_locked_pitches = domain_service.get_locked_pitches
+save_saisonplanung = domain_service.save_saisonplanung
+add_training_slot = domain_service.add_training_slot
+delete_training_slot = domain_service.delete_training_slot
+load_training_df_from_db = domain_service.load_training_df_from_db
+update_kabinen_und_emails = domain_service.update_kabinen_und_emails
+get_saisonplanung = domain_service.get_saisonplanung
+get_kabinen_konflikte = domain_service.get_kabinen_konflikte
+get_cancellation_stats = domain_service.get_cancellation_stats
+parse_trainingsplan = domain_service.parse_trainingsplan
+create_sample_csv = domain_service.create_sample_csv
+get_free_kabinen = domain_service.get_free_kabinen
+find_conflicts = domain_service.find_conflicts
 
 # ---------------------------------------------------------------------------
 # Seiten – Gemeinsam
