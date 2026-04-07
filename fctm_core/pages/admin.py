@@ -1465,7 +1465,7 @@ def page_einstellungen() -> None:
         unsafe_allow_html=True,
     )
 
-    tab_pin, tab_ms, tab_mail, tab_info = st.tabs(["🔑 Admin-PIN", "🔷 Microsoft-Login", "📧 E-Mail / SMTP", "ℹ️ System-Info"])
+    tab_pin, tab_oidc, tab_ms, tab_mail, tab_info = st.tabs(["🔑 Admin-PIN", "🔐 ClubAuth (OIDC)", "🔷 Microsoft-Login (Legacy)", "📧 E-Mail / SMTP", "ℹ️ System-Info"])
 
     with tab_pin:
         st.subheader("Admin-PIN ändern")
@@ -1485,6 +1485,77 @@ def page_einstellungen() -> None:
                 else:
                     set_setting("admin_pin", new_pin)
                     st.success("✅ PIN erfolgreich geändert.")
+
+    with tab_oidc:
+        st.subheader("ClubAuth – Zentrales Benutzerverwaltungs-System")
+        st.markdown(
+            "Verbindet Spielbetrieb mit dem **FCTM ClubAuth**-System. "
+            "Benutzer melden sich dann mit ihrem ClubAuth-Konto an — "
+            "Rollen werden zentral in ClubAuth verwaltet."
+        )
+
+        oidc_aktiv = bool(get_setting("oidc_client_id") and get_setting("oidc_base_url"))
+        if oidc_aktiv:
+            st.success("✅ ClubAuth-Login ist **aktiv** – Microsoft-Login und PIN-Fallback sind deaktiviert.")
+        else:
+            st.info("ℹ️ ClubAuth noch nicht konfiguriert – aktuell wird Microsoft-Login oder PIN verwendet.")
+
+        st.divider()
+        with st.form("oidc_form"):
+            oidc_url = st.text_input(
+                "ClubAuth-URL (Basis-URL)",
+                value=get_setting("oidc_base_url") or "",
+                placeholder="https://auth.westfalia-osterwick.de",
+                help="URL des ClubAuth-Servers, ohne abschließenden Slash.",
+            )
+            oidc_cid = st.text_input(
+                "Client ID",
+                value=get_setting("oidc_client_id") or "",
+                placeholder="Aus dem ClubAuth Admin-Panel kopieren",
+            )
+            oidc_sec = st.text_input(
+                "Client Secret",
+                value=get_setting("oidc_client_secret") or "",
+                type="password",
+                placeholder="Aus dem ClubAuth Admin-Panel kopieren",
+            )
+            oidc_ruri = st.text_input(
+                "Redirect URI",
+                value=get_setting("oidc_redirect_uri") or "http://localhost:8501",
+                placeholder="https://spielbetrieb.westfalia-osterwick.de",
+                help="Muss exakt mit der Redirect URI im ClubAuth Admin übereinstimmen.",
+            )
+            if st.form_submit_button("💾 Speichern", type="primary"):
+                set_setting("oidc_base_url", oidc_url.strip())
+                set_setting("oidc_client_id", oidc_cid.strip())
+                set_setting("oidc_client_secret", oidc_sec.strip())
+                set_setting("oidc_redirect_uri", oidc_ruri.strip())
+                st.success("✅ ClubAuth-Einstellungen gespeichert.")
+                st.rerun()
+
+        with st.expander("📖 ClubAuth-App registrieren (Schritt für Schritt)"):
+            st.markdown(
+                """
+**Im ClubAuth Admin-Panel** (`/admin/` → OAuth2 Provider → Applications → Add):
+
+| Feld | Wert |
+|------|------|
+| Name | `Spielbetrieb` |
+| Client type | `Confidential` |
+| Authorization grant type | `Authorization code` |
+| Redirect URIs | `https://spielbetrieb.westfalia-osterwick.de` |
+| Allowed scopes | `openid profile email roles` |
+| Algorithm | `RS256` |
+
+→ Nach dem Speichern **Client ID** und **Client Secret** hier eintragen.
+
+**Trainer anlegen (im ClubAuth Admin):**
+1. Users → Add → E-Mail, Vor-/Nachname eingeben
+2. Inline → Role Assignments → App: `spielbetrieb`, Role: `benutzer`
+3. Speichern → Trainer kann sich jetzt hier einloggen
+"""
+            )
+
 
     with tab_ms:
         st.subheader("Microsoft-Login (Azure AD / Entra ID)")

@@ -8,7 +8,13 @@ import pandas as pd
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 
-from fctm_core.auth_service import ms_exchange_code, ms_role_from_email
+from fctm_core.auth_service import (
+    ms_exchange_code,
+    ms_role_from_email,
+    oidc_exchange_code,
+    oidc_is_configured,
+    oidc_role_from_claims,
+)
 from fctm_core.domain_service import get_all_anfragen, get_saisonplanung
 from fctm_core.pages.admin import (
     page_admin_dashboard,
@@ -48,29 +54,56 @@ def main() -> None:
 
     _params = st.query_params
     if "code" in _params and not st.session_state.get("role"):
-        _redirect_uri = get_setting("ms_redirect_uri") or "http://localhost:8501"
-        _result = ms_exchange_code(_params["code"], _redirect_uri)
+        _code = _params["code"]
         st.query_params.clear()
-        if _result and "id_token_claims" in _result:
-            _claims = _result["id_token_claims"]
-            _email = (_claims.get("preferred_username") or _claims.get("email") or "").strip()
-            _name = _claims.get("name", _email)
-            _role, _team = ms_role_from_email(_email)
-            if _role:
-                _token = session_save(_role, _team, _name, _email)
-                _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
-                st.session_state.role = _role
-                st.session_state.team = _team
-                st.session_state.ms_name = _name
-                st.session_state.ms_email = _email
-                st.session_state["_session_token"] = _token
-                st.rerun()
+
+        if oidc_is_configured():
+            # --- ClubAuth OIDC-Flow ---
+            _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
+            _claims = oidc_exchange_code(_code, _redirect_uri)
+            if _claims:
+                _email = (_claims.get("email") or "").strip()
+                _name = _claims.get("name", _email)
+                _role, _team = oidc_role_from_claims(_claims)
+                if _role:
+                    _token = session_save(_role, _team, _name, _email)
+                    _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
+                    st.session_state.role = _role
+                    st.session_state.team = _team
+                    st.session_state.ms_name = _name
+                    st.session_state.ms_email = _email
+                    st.session_state["_session_token"] = _token
+                    st.rerun()
+                else:
+                    st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
+                    st.stop()
             else:
-                st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
+                st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
                 st.stop()
         else:
-            st.error("❌ Microsoft-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
-            st.stop()
+            # --- Legacy Microsoft-Flow ---
+            _redirect_uri = get_setting("ms_redirect_uri") or "http://localhost:8501"
+            _result = ms_exchange_code(_code, _redirect_uri)
+            if _result and "id_token_claims" in _result:
+                _claims = _result["id_token_claims"]
+                _email = (_claims.get("preferred_username") or _claims.get("email") or "").strip()
+                _name = _claims.get("name", _email)
+                _role, _team = ms_role_from_email(_email)
+                if _role:
+                    _token = session_save(_role, _team, _name, _email)
+                    _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
+                    st.session_state.role = _role
+                    st.session_state.team = _team
+                    st.session_state.ms_name = _name
+                    st.session_state.ms_email = _email
+                    st.session_state["_session_token"] = _token
+                    st.rerun()
+                else:
+                    st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
+                    st.stop()
+            else:
+                st.error("❌ Microsoft-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
+                st.stop()
 
     if "role" not in st.session_state:
         st.session_state.role = None
