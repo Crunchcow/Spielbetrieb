@@ -30,11 +30,12 @@ def oidc_auth_url(redirect_uri: str) -> str:
 def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
     """Tauscht Authorization-Code gegen UserInfo-Claims von ClubAuth."""
     base_url = (get_setting("oidc_base_url") or "").rstrip("/")
+    internal_url = (get_setting("oidc_internal_url") or base_url).rstrip("/")
     client_id = get_setting("oidc_client_id") or ""
     client_secret = get_setting("oidc_client_secret") or ""
     try:
         token_resp = _requests.post(
-            f"{base_url}/o/token/",
+            f"{internal_url}/o/token/",
             data={
                 "grant_type": "authorization_code",
                 "code": code,
@@ -48,7 +49,7 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
         access_token = token_resp.json().get("access_token", "")
 
         ui_resp = _requests.get(
-            f"{base_url}/o/userinfo/",
+            f"{internal_url}/o/userinfo/",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
