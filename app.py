@@ -1,5 +1,5 @@
 """
-FCTM – Football Club Training & Match Management System
+WOHU – Westfalia Osterwick Hub
 """
 
 from datetime import date, timedelta
@@ -39,7 +39,7 @@ from fctm_core.ui_helpers import CSS
 
 def main() -> None:
     st.set_page_config(
-        page_title="FCTM – Spielbetrieb",
+        page_title="WOHU – Spielbetrieb",
         page_icon="⚽",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -136,7 +136,7 @@ def main() -> None:
         st.markdown(
             '<div style="text-align:center;padding:16px 0 10px 0;">'
             '<span style="font-size:40px;">⚽</span><br>'
-            '<span style="color:#fff;font-size:18px;font-weight:bold;">FCTM</span><br>'
+            '<span style="color:#fff;font-size:18px;font-weight:bold;">WOHU</span><br>'
             '<span style="color:#ffdada;font-size:11px;">Spielbetrieb-Manager</span><br>'
             f'<div style="margin-top:8px;">{badge_html}</div>'
             f"{team_line}"
@@ -200,7 +200,7 @@ def main() -> None:
             st.session_state.pop("ms_email", None)
             st.session_state.pop("_session_token", None)
             st.rerun()
-        st.caption("Version 2.1.0 · FCTM")
+        st.caption("Version 2.1.0 · WOHU")
 
     routing = {
         "📅 Dashboard": page_admin_dashboard,

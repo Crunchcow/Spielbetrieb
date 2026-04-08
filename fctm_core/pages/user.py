@@ -105,7 +105,7 @@ def page_user_anfrage() -> None:
                     "", f_notizen, other_conflicts, typ="Neue Spielanfrage",
                 )
                 ok, err = send_email(
-                    f"[FCTM] Neue Spielanfrage #{rid}: {heim_val} vs {f_gast.strip()} "
+                    f"[WOHU] Neue Spielanfrage #{rid}: {heim_val} vs {f_gast.strip()} "
                     f"({f_datum.strftime('%d.%m.%Y')})", html,
                 )
                 if ok:
@@ -171,7 +171,7 @@ def page_user_anfrage() -> None:
                     rid = create_anfrage_verlegung(v_id, v_datum, v_uhrzeit, v_platz, v_notizen.strip(), erstellt_von=my_team)
                     st.success(f"✅ Verlegungsantrag #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ⏩ Spielverlegung #{rid}: {v_match['heimteam']} vs {v_match['gastteam']} → {v_datum.strftime('%d.%m.%Y')} {v_uhrzeit}",
+                        f"[WOHU] ⏩ Spielverlegung #{rid}: {v_match['heimteam']} vs {v_match['gastteam']} → {v_datum.strftime('%d.%m.%Y')} {v_uhrzeit}",
                         _mail_anfrage_html(rid, date.fromisoformat(v_match["datum"]), v_match["uhrzeit"], v_match["platz"],
                                            v_match["heimteam"], v_match["gastteam"], "", v_notizen, [],
                                            typ=f"Spielverlegung → {v_datum.strftime('%d.%m.%Y')} {v_uhrzeit} · {v_platz}"),
@@ -220,7 +220,7 @@ def page_user_anfrage() -> None:
                     )
                     st.success(f"✅ Verlegungsantrag #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ⏩ Spielverlegung #{rid}: {heim_val} vs {vd_gast.strip()} → {vd_n_datum.strftime('%d.%m.%Y')} {vd_n_uhrzeit}",
+                        f"[WOHU] ⏩ Spielverlegung #{rid}: {heim_val} vs {vd_gast.strip()} → {vd_n_datum.strftime('%d.%m.%Y')} {vd_n_uhrzeit}",
                         _mail_anfrage_html(rid, vd_datum, vd_uhrzeit, vd_platz, heim_val, vd_gast.strip(), "", vd_notizen, [],
                                            typ=f"Spielverlegung → {vd_n_datum.strftime('%d.%m.%Y')} {vd_n_uhrzeit} · {vd_n_platz}"),
                     )
@@ -276,7 +276,7 @@ def page_user_anfrage() -> None:
                     rid = create_anfrage_uhrzeit_aenderung(u_id, u_neue_uhrzeit, u_notizen.strip(), erstellt_von=my_team)
                     st.success(f"✅ Uhrzeitänderung #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ⏰ Uhrzeitänderung #{rid}: {u_match['heimteam']} vs {u_match['gastteam']} – {u_match['uhrzeit']} → {u_neue_uhrzeit}",
+                        f"[WOHU] ⏰ Uhrzeitänderung #{rid}: {u_match['heimteam']} vs {u_match['gastteam']} – {u_match['uhrzeit']} → {u_neue_uhrzeit}",
                         _mail_anfrage_html(rid, date.fromisoformat(u_match["datum"]), u_match["uhrzeit"], u_match["platz"],
                                            u_match["heimteam"], u_match["gastteam"], "", u_notizen, [],
                                            typ=f"Uhrzeitänderung: {u_match['uhrzeit']} → {u_neue_uhrzeit}"),
@@ -315,7 +315,7 @@ def page_user_anfrage() -> None:
                     )
                     st.success(f"✅ Uhrzeitänderung #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ⏰ Uhrzeitänderung #{rid}: {heim_val} vs {ud_gast.strip()} – {ud_uhrzeit} → {ud_neue_uhrzeit}",
+                        f"[WOHU] ⏰ Uhrzeitänderung #{rid}: {heim_val} vs {ud_gast.strip()} – {ud_uhrzeit} → {ud_neue_uhrzeit}",
                         _mail_anfrage_html(rid, ud_datum, ud_uhrzeit, ud_platz, heim_val, ud_gast.strip(), "", ud_notizen, [],
                                            typ=f"Uhrzeitänderung: {ud_uhrzeit} → {ud_neue_uhrzeit}"),
                     )
@@ -369,7 +369,7 @@ def page_user_anfrage() -> None:
                         rid = create_anfrage_stornierung(s_id, s_notizen, erstellt_von=my_team)
                         st.success(f"✅ Stornierungsantrag #{rid} eingereicht!")
                         ok, err = send_email(
-                            f"[FCTM] ❌ Stornierungsantrag #{rid}: {s_match['heimteam']} vs {s_match['gastteam']} ({s_match['datum']})",
+                            f"[WOHU] ❌ Stornierungsantrag #{rid}: {s_match['heimteam']} vs {s_match['gastteam']} ({s_match['datum']})",
                             _mail_anfrage_html(rid, date.fromisoformat(s_match["datum"]), s_match["uhrzeit"], s_match["platz"],
                                                s_match["heimteam"], s_match["gastteam"], "", s_notizen, [], typ="Stornierungsantrag"),
                         )
@@ -404,7 +404,7 @@ def page_user_anfrage() -> None:
                     )
                     st.success(f"✅ Stornierungsantrag #{rid} eingereicht!")
                     ok, err = send_email(
-                        f"[FCTM] ❌ Stornierungsantrag #{rid}: {heim_val} vs {sd_gast.strip()} ({sd_datum.strftime('%d.%m.%Y')})",
+                        f"[WOHU] ❌ Stornierungsantrag #{rid}: {heim_val} vs {sd_gast.strip()} ({sd_datum.strftime('%d.%m.%Y')})",
                         _mail_anfrage_html(rid, sd_datum, sd_uhrzeit, sd_platz, heim_val, sd_gast.strip(), "", sd_notizen, [], typ="Stornierungsantrag"),
                     )
                     if ok: st.info("📧 Benachrichtigung ans Funktionspostfach gesendet.")
@@ -459,7 +459,7 @@ def page_user_anfrage() -> None:
                 </div></body></html>
                 """
                 ok, err = send_email(
-                    f"[FCTM] 💬 Freie Anfrage #{rid} von {my_team}: {f_betreff.strip()}",
+                    f"[WOHU] 💬 Freie Anfrage #{rid} von {my_team}: {f_betreff.strip()}",
                     mail_html,
                 )
                 if ok:

@@ -10,7 +10,7 @@ def page_login() -> None:
     st.markdown(
         '<div class="login-box">'
         '<div style="font-size:56px;margin-bottom:8px;">⚽</div>'
-        "<h2>FCTM – Spielbetrieb</h2>"
+        "<h2>WOHU – Spielbetrieb</h2>"
         "<p>Bitte melden Sie sich an</p>"
         "</div>",
         unsafe_allow_html=True,

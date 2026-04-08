@@ -492,7 +492,7 @@ def page_anfragen_verwalten() -> None:
                                             frei_antwort.strip(),
                                         )
                                         ok_a, err_a = send_email(
-                                            f"[FCTM] 💬 Antwort auf Ihre Anfrage #{r['id']}: {betreff_txt[:50]}",
+                                            f"[WOHU] 💬 Antwort auf Ihre Anfrage #{r['id']}: {betreff_txt[:50]}",
                                             antwort_html,
                                             to=trainer_email,
                                         )
@@ -512,7 +512,7 @@ def page_anfragen_verwalten() -> None:
                                     if trainer_email:
                                         abl_html = _mail_ablehnung_html(r["id"], "allgemein", "", "", "", "", "", frei_abl_grund.strip())
                                         ok_a, err_a = send_email(
-                                            f"[FCTM] ❌ Anfrage #{r['id']} abgelehnt: {betreff_txt[:50]}",
+                                            f"[WOHU] ❌ Anfrage #{r['id']} abgelehnt: {betreff_txt[:50]}",
                                             abl_html,
                                             to=trainer_email,
                                         )
@@ -632,7 +632,7 @@ def page_anfragen_verwalten() -> None:
                                     typ="Spielanfrage GENEHMIGT – JETZT IN DFBNET EINTRAGEN!",
                                 )
                                 ok, err = send_email(
-                                    f"[FCTM] 📋 DFBnet eintragen: " f"{r['heimteam']} vs {r['gastteam']} ({r['datum']})",
+                                    f"[WOHU] 📋 DFBnet eintragen: " f"{r['heimteam']} vs {r['gastteam']} ({r['datum']})",
                                     html,
                                 )
                                 if ok:
@@ -660,7 +660,7 @@ def page_anfragen_verwalten() -> None:
                                         abl_grund.strip(),
                                     )
                                     ok_a, err_a = send_email(
-                                        f"[FCTM] ❌ Anfrage #{r['id']} abgelehnt: " f"{r['heimteam']} vs {r['gastteam']}",
+                                        f"[WOHU] ❌ Anfrage #{r['id']} abgelehnt: " f"{r['heimteam']} vs {r['gastteam']}",
                                         abl_html,
                                         to=trainer_email,
                                     )
@@ -730,7 +730,7 @@ def page_anfragen_verwalten() -> None:
                                     r["gastteam"],
                                     r.get("notizen", ""),
                                 )
-                                subj = f"[FCTM] ❌ Spielabsage: {r['heimteam']} vs {r['gastteam']} ({r['datum']})"
+                                subj = f"[WOHU] ❌ Spielabsage: {r['heimteam']} vs {r['gastteam']} ({r['datum']})"
                             elif typ_ in ("aenderung", "verlegung", "uhrzeit_aenderung"):
                                 trainer_html = _mail_trainer_aenderung_html(
                                     date.fromisoformat(r["datum"]),
@@ -745,7 +745,7 @@ def page_anfragen_verwalten() -> None:
                                     r["gastteam"],
                                 )
                                 icons = {"aenderung": "✏️", "verlegung": "⏩", "uhrzeit_aenderung": "⏰"}
-                                subj = f"[FCTM] {icons.get(typ_, '✏️')} Spieländerung: {r['heimteam']} vs {r['gastteam']} ({r['datum']})"
+                                subj = f"[WOHU] {icons.get(typ_, '✏️')} Spieländerung: {r['heimteam']} vs {r['gastteam']} ({r['datum']})"
                             else:
                                 trainer_html = _mail_trainer_html(
                                     date.fromisoformat(r["datum"]),
@@ -756,7 +756,7 @@ def page_anfragen_verwalten() -> None:
                                     r.get("kabine", ""),
                                     "",
                                 )
-                                subj = f"[FCTM] ⚽ Spielbestätigung: {r['heimteam']} vs {r['gastteam']} am {r['datum']}"
+                                subj = f"[WOHU] ⚽ Spielbestätigung: {r['heimteam']} vs {r['gastteam']} am {r['datum']}"
                             ok2, err2 = send_email(subj, trainer_html, to=custom_mail.strip())
                             if ok2:
                                 st.info(f"📧 Trainer-Mail an {custom_mail.strip()} gesendet.")
@@ -866,7 +866,7 @@ def page_admin_spiel_anlegen() -> None:
                         typ="Neues Spiel angelegt – JETZT IN DFBNET EINTRAGEN!",
                     )
                     ok, err = send_email(
-                        f"[FCTM] 📋 DFBnet eintragen: {f_heim} vs {f_gast} ({f_datum.strftime('%d.%m.%Y')})",
+                        f"[WOHU] 📋 DFBnet eintragen: {f_heim} vs {f_gast} ({f_datum.strftime('%d.%m.%Y')})",
                         html,
                     )
                     if ok:
@@ -927,7 +927,7 @@ def page_admin_spiel_anlegen() -> None:
                             "",
                         )
                         ok2, err2 = send_email(
-                            f"[FCTM] ⚽ Spielbestätigung: {r['heimteam']} vs {r['gastteam']} am {r['datum']}",
+                            f"[WOHU] ⚽ Spielbestätigung: {r['heimteam']} vs {r['gastteam']} am {r['datum']}",
                             trainer_html,
                             to=t_mail.strip(),
                         )
@@ -1042,7 +1042,7 @@ def page_admin_spiel_anlegen() -> None:
                                     m["gastteam"],
                                 )
                                 ok3, err3 = send_email(
-                                    f"[FCTM] ✏️ Spieländerung: {m['heimteam']} vs {m['gastteam']} ({m['datum']})",
+                                    f"[WOHU] ✏️ Spieländerung: {m['heimteam']} vs {m['gastteam']} ({m['datum']})",
                                     aend_html,
                                     to=e_tmail.strip(),
                                 )
@@ -1070,7 +1070,7 @@ def page_admin_spiel_anlegen() -> None:
                             d_grund,
                         )
                         ok4, err4 = send_email(
-                            f"[FCTM] ❌ Spielabsage: {m['heimteam']} vs {m['gastteam']} ({m['datum']})",
+                            f"[WOHU] ❌ Spielabsage: {m['heimteam']} vs {m['gastteam']} ({m['datum']})",
                             del_html,
                             to=d_tmail.strip(),
                         )
@@ -1489,7 +1489,7 @@ def page_einstellungen() -> None:
     with tab_oidc:
         st.subheader("ClubAuth – Zentrales Benutzerverwaltungs-System")
         st.markdown(
-            "Verbindet Spielbetrieb mit dem **FCTM ClubAuth**-System. "
+            "Verbindet Spielbetrieb mit dem **WOHU ClubAuth**-System. "
             "Benutzer melden sich dann mit ihrem ClubAuth-Konto an — "
             "Rollen werden zentral in ClubAuth verwaltet."
         )
@@ -1589,13 +1589,13 @@ def page_einstellungen() -> None:
             ms_adm = st.text_area(
                 "Admin-E-Mail-Adressen",
                 value=get_setting("admin_emails"),
-                placeholder="admin@fctm.de\nvorstand@fctm.de",
+                placeholder="admin@westfalia-osterwick.de\nvorstand@westfalia-osterwick.de",
                 help="Eine Adresse pro Zeile. Diese erhalten vollen Admin-Zugang.",
             )
             ms_kord = st.text_area(
                 "Koordinatoren-E-Mail-Adressen",
                 value=get_setting("koordinator_emails") or "",
-                placeholder="koordinator@fctm.de\nspielausschuss@fctm.de",
+                placeholder="koordinator@westfalia-osterwick.de\nspielausschuss@westfalia-osterwick.de",
                 help="Eine Adresse pro Zeile. Koordinatoren sehen Dashboard, Anfragen und Spiel anlegen – aber keine Systemeinstellungen oder Saisonplanung.",
             )
             if st.form_submit_button("💾 Speichern", type="primary"):
@@ -1613,7 +1613,7 @@ def page_einstellungen() -> None:
                 """
 1. **Azure Portal** öffnen: [portal.azure.com](https://portal.azure.com)
 2. **Microsoft Entra ID → App-Registrierungen → Neue Registrierung**
-3. Name: z. B. `FCTM Spielbetrieb`
+3. Name: z. B. `WOHU Spielbetrieb`
 4. Kontotypen: *Nur Konten in diesem Organisationsverzeichnis*
 5. Redirect URI: `Web` → Ihre Streamlit-URL (z. B. `http://localhost:8501`)
 6. Nach Erstellung: **Application (Client) ID** und **Directory (Tenant) ID** kopieren
@@ -1703,7 +1703,7 @@ def page_einstellungen() -> None:
                         ["U19", "1. Mannschaft"],
                         typ="TEST-Nachricht",
                     )
-                    ok, err = send_email("[FCTM] Test-E-Mail – Konfigurationsprüfung", test_html)
+                    ok, err = send_email("[WOHU] Test-E-Mail – Konfigurationsprüfung", test_html)
                     if ok:
                         st.success(f"✅ Test-E-Mail erfolgreich gesendet an: {e_emp}")
                     else:
