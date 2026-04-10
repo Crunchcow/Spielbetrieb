@@ -8,8 +8,6 @@ import pandas as pd
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 
-import streamlit.components.v1 as _components
-
 from fctm_core.auth_service import (
     oidc_auth_url,
     oidc_exchange_code,
@@ -129,17 +127,6 @@ def main() -> None:
         if _first_render:
             # CookieController noch nicht geladen – kurz warten
             st.empty()
-            st.stop()
-        if oidc_is_configured():
-            _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
-            _login_url = oidc_auth_url(_redirect_uri)
-            _components.html(
-                f"""<!DOCTYPE html><html><body style="margin:0;font-family:sans-serif;">
-                <p style="color:#555;padding:16px;">Weiterleitung zu ClubAuth…</p>
-                <script>window.parent.location.href = "{_login_url}";</script>
-                </body></html>""",
-                height=60,
-            )
             st.stop()
         page_login()
         return
