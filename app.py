@@ -6,14 +6,11 @@ from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as st_components
 from streamlit_cookies_controller import CookieController
 
 from fctm_core.auth_service import (
     oidc_auth_url,
-    oidc_exchange_code,
     oidc_is_configured,
-    oidc_role_from_claims,
 )
 from fctm_core.domain_service import get_all_anfragen, get_saisonplanung
 from fctm_core.pages.admin import (
@@ -35,7 +32,6 @@ from fctm_core.storage import (
     init_db,
     session_delete,
     session_load,
-    session_save,
 )
 from fctm_core.ui_helpers import CSS
 
@@ -52,55 +48,7 @@ def main() -> None:
 
     _cookies = CookieController()
 
-    _params = st.query_params
-
-    # --- OIDC-Callback: ?code= verarbeiten ---
-    if "code" in _params:
-        _code = _params["code"]
-        _rbase = (get_setting("oidc_redirect_uri") or "http://localhost:8503").rstrip("/")
-
-        # Guard: session_state bereits gesetzt (vorheriger erfolgreicher Exchange in dieser Session)
-        if st.session_state.get("role"):
-            st_components.html(
-                f'<script>window.top.location.replace("{_rbase}");</script>',
-                height=0,
-            )
-            st.stop()
-
-        # Code gegen Tokens tauschen
-        _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
-        _claims = oidc_exchange_code(_code, _redirect_uri)
-        if _claims:
-            _email = (_claims.get("email") or "").strip()
-            _name = _claims.get("name", _email)
-            _role, _team = oidc_role_from_claims(_claims)
-            if _role:
-                _token = session_save(_role, _team, _name, _email)
-                st.session_state.role = _role
-                st.session_state.team = _team
-                st.session_state.ms_name = _name
-                st.session_state.ms_email = _email
-                st.session_state["_session_token"] = _token
-                # Cookie per JS setzen UND sofort weiterleiten – kein CookieController.set()
-                # (CookieController.set() triggert immer einen Streamlit-Rerun → Doppel-Exchange)
-                _rbase2 = _redirect_uri.rstrip("/")
-                _max_age = _COOKIE_MAX_AGE
-                st_components.html(
-                    f"""<script>
-                    document.cookie = "{_COOKIE_NAME}={_token}; path=/; max-age={_max_age}; samesite=lax";
-                    window.top.location.replace("{_rbase2}");
-                    </script>""",
-                    height=0,
-                )
-                st.stop()
-            else:
-                st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
-                st.stop()
-        else:
-            st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
-            st.stop()
-
-    # Cookie-Prüfung für direkten Aufruf (ohne ?code=)
+    # Cookie-Prüfung: Session laden (OIDC-Callback läuft jetzt separat via callback.py)
     if "role" not in st.session_state:
         st.session_state.role = None
         _token = _cookies.get(_COOKIE_NAME)
