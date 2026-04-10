@@ -79,13 +79,9 @@ def main() -> None:
             st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
             st.stop()
 
-    # Erstes Render: CookieController noch nicht geladen → role noch nicht bekannt
-    _first_render = "role" not in st.session_state
-    if _first_render:
+    # Cookie-Prüfung (CookieController braucht ggf. einen Rerun zum Laden)
+    if "role" not in st.session_state:
         st.session_state.role = None
-
-    # Cookie-Prüfung (ab 2. Render durch CookieController-Rerun zuverlässig)
-    if not st.session_state.get("role"):
         _token = _cookies.get(_COOKIE_NAME)
         if _token:
             _sess = session_load(_token)
@@ -124,10 +120,6 @@ def main() -> None:
         st.session_state.training_df = pd.DataFrame(columns=["Platz", "Bereich", "Tag", "Zeit", "Team"])
 
     if st.session_state.role is None:
-        if _first_render:
-            # CookieController noch nicht geladen – kurz warten
-            st.empty()
-            st.stop()
         page_login()
         return
 
