@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as st_components
 from streamlit_cookies_controller import CookieController
 
 from fctm_core.auth_service import (
@@ -56,45 +57,60 @@ def main() -> None:
     # --- OIDC-Callback: ?code= verarbeiten ---
     if "code" in _params:
         _code = _params["code"]
-        # Cookie-Prüfung: schon eingeloggt? (Cookie aus vorherigem erfolgreichen Exchange)
+        _rbase = (get_setting("oidc_redirect_uri") or "http://localhost:8503").rstrip("/")
+
+        # Guard 1: session_state bereits gesetzt (z.B. durch CookieController-Rerun)
+        if st.session_state.get("role"):
+            st_components.html(
+                f'<script>window.parent.location.replace("{_rbase}");</script>',
+                height=0,
+            )
+            st.stop()
+
+        # Guard 2: gültiger Cookie vorhanden (vorheriger erfolgreicher Exchange)
         _existing_token = _cookies.get(_COOKIE_NAME)
         _existing_sess = session_load(_existing_token) if _existing_token else None
         if _existing_sess:
-            # Bereits eingeloggt via Cookie – Code einfach entfernen, dann Seite neu laden
             st.session_state.role = _existing_sess["role"]
             st.session_state.team = _existing_sess["team"]
             st.session_state.ms_name = _existing_sess["ms_name"]
             st.session_state.ms_email = _existing_sess["ms_email"]
             st.session_state["_session_token"] = _existing_token
-            _redirect_base = (get_setting("oidc_redirect_uri") or "http://localhost:8503").rstrip("/")
-            st.markdown(f'<meta http-equiv="refresh" content="0;url={_redirect_base}">', unsafe_allow_html=True)
+            st_components.html(
+                f'<script>window.parent.location.replace("{_rbase}");</script>',
+                height=0,
+            )
             st.stop()
-        else:
-            # Code gegen Tokens tauschen
-            _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
-            _claims = oidc_exchange_code(_code, _redirect_uri)
-            if _claims:
-                _email = (_claims.get("email") or "").strip()
-                _name = _claims.get("name", _email)
-                _role, _team = oidc_role_from_claims(_claims)
-                if _role:
-                    _token = session_save(_role, _team, _name, _email)
-                    _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
-                    st.session_state.role = _role
-                    st.session_state.team = _team
-                    st.session_state.ms_name = _name
-                    st.session_state.ms_email = _email
-                    st.session_state["_session_token"] = _token
-                    # Weiterleitung zur sauberen URL (ohne ?code=) – verhindert Doppel-Exchange
-                    _redirect_base = _redirect_uri.rstrip("/")
-                    st.markdown(f'<meta http-equiv="refresh" content="0;url={_redirect_base}">', unsafe_allow_html=True)
-                    st.stop()
-                else:
-                    st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
-                    st.stop()
-            else:
-                st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
+
+        # Code gegen Tokens tauschen
+        _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
+        _claims = oidc_exchange_code(_code, _redirect_uri)
+        if _claims:
+            _email = (_claims.get("email") or "").strip()
+            _name = _claims.get("name", _email)
+            _role, _team = oidc_role_from_claims(_claims)
+            if _role:
+                _token = session_save(_role, _team, _name, _email)
+                # Cookie und session_state setzen VOR dem Redirect
+                _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
+                st.session_state.role = _role
+                st.session_state.team = _team
+                st.session_state.ms_name = _name
+                st.session_state.ms_email = _email
+                st.session_state["_session_token"] = _token
+                # JS-Redirect zur sauberen URL (meta-refresh ignoriert Streamlit)
+                _rbase2 = _redirect_uri.rstrip("/")
+                st_components.html(
+                    f'<script>window.parent.location.replace("{_rbase2}");</script>',
+                    height=0,
+                )
                 st.stop()
+            else:
+                st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
+                st.stop()
+        else:
+            st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
+            st.stop()
 
     # Cookie-Prüfung für direkten Aufruf (ohne ?code=)
     if "role" not in st.session_state:
