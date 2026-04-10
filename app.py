@@ -81,8 +81,13 @@ def main() -> None:
             st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
             st.stop()
 
-    if "role" not in st.session_state:
+    # Erstes Render: CookieController noch nicht geladen → role noch nicht bekannt
+    _first_render = "role" not in st.session_state
+    if _first_render:
         st.session_state.role = None
+
+    # Cookie-Prüfung (ab 2. Render durch CookieController-Rerun zuverlässig)
+    if not st.session_state.get("role"):
         _token = _cookies.get(_COOKIE_NAME)
         if _token:
             _sess = session_load(_token)
@@ -121,6 +126,10 @@ def main() -> None:
         st.session_state.training_df = pd.DataFrame(columns=["Platz", "Bereich", "Tag", "Zeit", "Team"])
 
     if st.session_state.role is None:
+        if _first_render:
+            # CookieController noch nicht geladen – kurz warten
+            st.empty()
+            st.stop()
         if oidc_is_configured():
             _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
             _login_url = oidc_auth_url(_redirect_uri)
