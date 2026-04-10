@@ -45,7 +45,10 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
             },
             timeout=10,
         )
-        token_resp.raise_for_status()
+        if not token_resp.ok:
+            import sys
+            print(f"[OIDC] Token-Exchange fehlgeschlagen: {token_resp.status_code} {token_resp.text}", file=sys.stderr)
+            return None
         access_token = token_resp.json().get("access_token", "")
 
         ui_resp = _requests.get(
@@ -53,9 +56,14 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
-        ui_resp.raise_for_status()
+        if not ui_resp.ok:
+            import sys
+            print(f"[OIDC] Userinfo fehlgeschlagen: {ui_resp.status_code} {ui_resp.text}", file=sys.stderr)
+            return None
         return ui_resp.json()
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[OIDC] Exception: {e}", file=sys.stderr)
         return None
 
 
