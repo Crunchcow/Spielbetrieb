@@ -8,8 +8,12 @@ import pandas as pd
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 
+import streamlit.components.v1 as _components
+
 from fctm_core.auth_service import (
+    oidc_auth_url,
     oidc_exchange_code,
+    oidc_is_configured,
     oidc_role_from_claims,
 )
 from fctm_core.domain_service import get_all_anfragen, get_saisonplanung
@@ -117,6 +121,14 @@ def main() -> None:
         st.session_state.training_df = pd.DataFrame(columns=["Platz", "Bereich", "Tag", "Zeit", "Team"])
 
     if st.session_state.role is None:
+        if oidc_is_configured():
+            _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
+            _login_url = oidc_auth_url(_redirect_uri)
+            _components.html(
+                f'<script>window.top.location.href = "{_login_url}";</script>',
+                height=0,
+            )
+            st.stop()
         page_login()
         return
 
