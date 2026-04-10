@@ -1,3 +1,5 @@
+import sys
+import time
 import urllib.parse
 
 import msal
@@ -8,6 +10,12 @@ from .storage import db_connect, get_setting
 # ---------------------------------------------------------------------------
 # ClubAuth OIDC (primär, neu)
 # ---------------------------------------------------------------------------
+
+# In-Prozess-Cache: verhindert Doppel-Exchange bei Streamlit-Mehrfach-Reruns
+# { code: (claims_dict, timestamp) }
+_exchange_cache: dict[str, tuple[dict, float]] = {}
+_EXCHANGE_CACHE_TTL = 60  # Sekunden
+
 
 def oidc_is_configured() -> bool:
     """True wenn ClubAuth als OIDC-Provider konfiguriert ist."""
@@ -28,7 +36,22 @@ def oidc_auth_url(redirect_uri: str) -> str:
 
 
 def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
-    """Tauscht Authorization-Code gegen UserInfo-Claims von ClubAuth."""
+    """Tauscht Authorization-Code gegen UserInfo-Claims von ClubAuth.
+    
+    Cached das Ergebnis im Prozess-Speicher für TTL Sekunden, um Doppel-Exchange
+    bei Streamlit-Mehrfach-Reruns (CookieController etc.) zu verhindern.
+    """
+    global _exchange_cache
+    now = time.time()
+
+    # Abgelaufene Cache-Einträge bereinigen
+    _exchange_cache = {k: v for k, v in _exchange_cache.items() if now - v[1] < _EXCHANGE_CACHE_TTL}
+
+    # Gecachtes Ergebnis zurückgeben (verhindert invalid_grant bei Doppelaufruf)
+    if code in _exchange_cache:
+        print(f"[OIDC] Exchange aus Cache (Doppelaufruf verhindert)", file=sys.stderr)
+        return _exchange_cache[code][0]
+
     base_url = (get_setting("oidc_base_url") or "").rstrip("/")
     internal_url = (get_setting("oidc_internal_url") or base_url).rstrip("/")
     client_id = get_setting("oidc_client_id") or ""
@@ -46,7 +69,6 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
             timeout=10,
         )
         if not token_resp.ok:
-            import sys
             print(f"[OIDC] Token-Exchange fehlgeschlagen: {token_resp.status_code} {token_resp.text}", file=sys.stderr)
             return None
         access_token = token_resp.json().get("access_token", "")
@@ -57,12 +79,13 @@ def oidc_exchange_code(code: str, redirect_uri: str) -> dict | None:
             timeout=10,
         )
         if not ui_resp.ok:
-            import sys
             print(f"[OIDC] Userinfo fehlgeschlagen: {ui_resp.status_code} {ui_resp.text}", file=sys.stderr)
             return None
-        return ui_resp.json()
+        claims = ui_resp.json()
+        # Ergebnis cachen
+        _exchange_cache[code] = (claims, now)
+        return claims
     except Exception as e:
-        import sys
         print(f"[OIDC] Exception: {e}", file=sys.stderr)
         return None
 
