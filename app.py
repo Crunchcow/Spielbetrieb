@@ -52,6 +52,20 @@ def main() -> None:
     _cookies = CookieController()
 
     _params = st.query_params
+
+    # Cookie-Prüfung zuerst (CookieController braucht ggf. einen Rerun zum Laden)
+    if "role" not in st.session_state:
+        st.session_state.role = None
+        _token = _cookies.get(_COOKIE_NAME)
+        if _token:
+            _sess = session_load(_token)
+            if _sess:
+                st.session_state.role = _sess["role"]
+                st.session_state.team = _sess["team"]
+                st.session_state.ms_name = _sess["ms_name"]
+                st.session_state.ms_email = _sess["ms_email"]
+                st.session_state["_session_token"] = _token
+
     if "code" in _params and not st.session_state.get("role"):
         _code = _params["code"]
 
@@ -70,26 +84,18 @@ def main() -> None:
                 st.session_state.ms_name = _name
                 st.session_state.ms_email = _email
                 st.session_state["_session_token"] = _token
-                # query_params NICHT löschen – würde Rerun mit leerer Session auslösen
+                st.query_params.pop("code")  # Code aus URL entfernen, verhindert Doppel-Exchange
             else:
+                st.query_params.pop("code")
                 st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
                 st.stop()
         else:
+            st.query_params.pop("code")
             st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
             st.stop()
-
-    # Cookie-Prüfung (CookieController braucht ggf. einen Rerun zum Laden)
-    if "role" not in st.session_state:
-        st.session_state.role = None
-        _token = _cookies.get(_COOKIE_NAME)
-        if _token:
-            _sess = session_load(_token)
-            if _sess:
-                st.session_state.role = _sess["role"]
-                st.session_state.team = _sess["team"]
-                st.session_state.ms_name = _sess["ms_name"]
-                st.session_state.ms_email = _sess["ms_email"]
-                st.session_state["_session_token"] = _token
+    elif "code" in _params and st.session_state.get("role"):
+        # Bereits authentifiziert – veralteten Code aus URL entfernen
+        st.query_params.pop("code")
 
     _y = date.today().year
     _m = date.today().month
