@@ -71,7 +71,7 @@ def main() -> None:
                 st.session_state.ms_name = _name
                 st.session_state.ms_email = _email
                 st.session_state["_session_token"] = _token
-                st.rerun()
+                # Kein st.rerun() – direkt weiterlaufen lassen
             else:
                 st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
                 st.stop()
