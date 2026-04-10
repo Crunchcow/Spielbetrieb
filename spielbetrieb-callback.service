@@ -1,0 +1,14 @@
+[Unit]
+Description=Spielbetrieb OIDC Callback Handler (Flask)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/spielbetrieb
+ExecStart=/var/www/spielbetrieb/.venv/bin/python callback.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
