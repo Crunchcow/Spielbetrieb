@@ -49,8 +49,8 @@ def main() -> None:
     _cookies = CookieController()
 
     # Cookie-Prüfung: Session laden (OIDC-Callback läuft jetzt separat via callback.py)
-    if "role" not in st.session_state:
-        st.session_state.role = None
+    # Bedingung: role nicht gesetzt ODER noch None (CookieController braucht 2 Runs zum Laden)
+    if not st.session_state.get("role"):
         _token = _cookies.get(_COOKIE_NAME)
         if _token:
             _sess = session_load(_token)
@@ -60,6 +60,8 @@ def main() -> None:
                 st.session_state.ms_name = _sess["ms_name"]
                 st.session_state.ms_email = _sess["ms_email"]
                 st.session_state["_session_token"] = _token
+        if "role" not in st.session_state:
+            st.session_state.role = None
 
     _y = date.today().year
     _m = date.today().month
