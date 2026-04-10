@@ -59,23 +59,8 @@ def main() -> None:
         _code = _params["code"]
         _rbase = (get_setting("oidc_redirect_uri") or "http://localhost:8503").rstrip("/")
 
-        # Guard 1: session_state bereits gesetzt (z.B. durch CookieController-Rerun)
+        # Guard: session_state bereits gesetzt (vorheriger erfolgreicher Exchange in dieser Session)
         if st.session_state.get("role"):
-            st_components.html(
-                f'<script>window.parent.location.replace("{_rbase}");</script>',
-                height=0,
-            )
-            st.stop()
-
-        # Guard 2: gültiger Cookie vorhanden (vorheriger erfolgreicher Exchange)
-        _existing_token = _cookies.get(_COOKIE_NAME)
-        _existing_sess = session_load(_existing_token) if _existing_token else None
-        if _existing_sess:
-            st.session_state.role = _existing_sess["role"]
-            st.session_state.team = _existing_sess["team"]
-            st.session_state.ms_name = _existing_sess["ms_name"]
-            st.session_state.ms_email = _existing_sess["ms_email"]
-            st.session_state["_session_token"] = _existing_token
             st_components.html(
                 f'<script>window.parent.location.replace("{_rbase}");</script>',
                 height=0,
@@ -91,17 +76,20 @@ def main() -> None:
             _role, _team = oidc_role_from_claims(_claims)
             if _role:
                 _token = session_save(_role, _team, _name, _email)
-                # Cookie und session_state setzen VOR dem Redirect
-                _cookies.set(_COOKIE_NAME, _token, max_age=_COOKIE_MAX_AGE)
                 st.session_state.role = _role
                 st.session_state.team = _team
                 st.session_state.ms_name = _name
                 st.session_state.ms_email = _email
                 st.session_state["_session_token"] = _token
-                # JS-Redirect zur sauberen URL (meta-refresh ignoriert Streamlit)
+                # Cookie per JS setzen UND sofort weiterleiten – kein CookieController.set()
+                # (CookieController.set() triggert immer einen Streamlit-Rerun → Doppel-Exchange)
                 _rbase2 = _redirect_uri.rstrip("/")
+                _max_age = _COOKIE_MAX_AGE
                 st_components.html(
-                    f'<script>window.parent.location.replace("{_rbase2}");</script>',
+                    f"""<script>
+                    document.cookie = "{_COOKIE_NAME}={_token}; path=/; max-age={_max_age}; samesite=lax";
+                    window.parent.location.replace("{_rbase2}");
+                    </script>""",
                     height=0,
                 )
                 st.stop()
