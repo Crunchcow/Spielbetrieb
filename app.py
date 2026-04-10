@@ -125,8 +125,11 @@ def main() -> None:
             _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
             _login_url = oidc_auth_url(_redirect_uri)
             _components.html(
-                f'<script>window.top.location.href = "{_login_url}";</script>',
-                height=0,
+                f"""<!DOCTYPE html><html><body style="margin:0;font-family:sans-serif;">
+                <p style="color:#555;padding:16px;">Weiterleitung zu ClubAuth…</p>
+                <script>window.parent.location.href = "{_login_url}";</script>
+                </body></html>""",
+                height=60,
             )
             st.stop()
         page_login()
