@@ -62,7 +62,7 @@ def main() -> None:
         # Guard: session_state bereits gesetzt (vorheriger erfolgreicher Exchange in dieser Session)
         if st.session_state.get("role"):
             st_components.html(
-                f'<script>window.parent.location.replace("{_rbase}");</script>',
+                f'<script>window.top.location.replace("{_rbase}");</script>',
                 height=0,
             )
             st.stop()
@@ -88,7 +88,7 @@ def main() -> None:
                 st_components.html(
                     f"""<script>
                     document.cookie = "{_COOKIE_NAME}={_token}; path=/; max-age={_max_age}; samesite=lax";
-                    window.parent.location.replace("{_rbase2}");
+                    window.top.location.replace("{_rbase2}");
                     </script>""",
                     height=0,
                 )
