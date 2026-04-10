@@ -54,7 +54,7 @@ def main() -> None:
     _params = st.query_params
     if "code" in _params and not st.session_state.get("role"):
         _code = _params["code"]
-        st.query_params.clear()
+        # ERST verarbeiten, DANN löschen (clear() triggert sonst Rerun)
 
         # --- ClubAuth OIDC-Flow ---
         _redirect_uri = get_setting("oidc_redirect_uri") or "http://localhost:8501"
@@ -71,11 +71,13 @@ def main() -> None:
                 st.session_state.ms_name = _name
                 st.session_state.ms_email = _email
                 st.session_state["_session_token"] = _token
-                # Kein st.rerun() – direkt weiterlaufen lassen
+                st.query_params.clear()  # Erst jetzt – nach dem Verarbeiten
             else:
+                st.query_params.clear()
                 st.error(f"⛔ Kein Zugang für **{_email}**. Bitte den Administrator kontaktieren.")
                 st.stop()
         else:
+            st.query_params.clear()
             st.error("❌ ClubAuth-Anmeldung fehlgeschlagen. Bitte erneut versuchen.")
             st.stop()
 
