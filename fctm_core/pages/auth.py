@@ -1,11 +1,16 @@
 import streamlit as st
 
 from fctm_core.auth_service import oidc_auth_url, oidc_is_configured
-from fctm_core.storage import get_setting
+from fctm_core.storage import (
+    _COOKIE_MAX_AGE,
+    _COOKIE_NAME,
+    get_setting,
+    session_save,
+)
 from fctm_core.ui_helpers import CSS
 
 
-def page_login() -> None:
+def page_login(cookies=None) -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="login-box">'
@@ -37,7 +42,34 @@ def page_login() -> None:
                 unsafe_allow_html=True,
             )
         else:
-            st.error(
+            st.warning(
                 "⚙️ ClubAuth ist nicht konfiguriert. "
-                "Bitte einen Administrator kontaktieren."
+                "Administratoren können sich mit dem Admin-PIN anmelden."
             )
+            st.write("")
+            with st.form("pin_login_form"):
+                pin_input = st.text_input(
+                    "🔑 Admin-PIN",
+                    type="password",
+                    placeholder="PIN eingeben …",
+                )
+                submitted = st.form_submit_button("Anmelden", use_container_width=True)
+
+            if submitted:
+                stored_pin = get_setting("admin_pin") or "1234"
+                if pin_input == stored_pin:
+                    token = session_save("admin", "", "Admin", "")
+                    st.session_state.role = "admin"
+                    st.session_state.team = ""
+                    st.session_state.ms_name = "Admin"
+                    st.session_state.ms_email = ""
+                    st.session_state["_session_token"] = token
+                    if cookies is not None:
+                        cookies.set(
+                            _COOKIE_NAME,
+                            token,
+                            max_age=_COOKIE_MAX_AGE,
+                        )
+                    st.rerun()
+                else:
+                    st.error("❌ Falscher PIN.")
