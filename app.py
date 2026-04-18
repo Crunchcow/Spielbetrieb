@@ -91,7 +91,7 @@ def main() -> None:
         st.session_state.training_df = pd.DataFrame(columns=["Platz", "Bereich", "Tag", "Zeit", "Team"])
 
     if st.session_state.role is None:
-        page_login()
+        page_login(cookies=_cookies)
         return
 
     with st.sidebar:

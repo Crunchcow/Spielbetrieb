@@ -4,23 +4,28 @@
 
 | | |
 |---|---|
-| **Stack** | Python + Streamlit |
+| **Stack** | Python + Streamlit + Flask (OIDC-Callback) |
 | **Datenbank** | SQLite (`fctm.db`, lokal auf dem Server – **nicht im Repo**) |
 | **Server** | `89.167.0.28` – Hostname: `WestfaliaOsterwick` (Ubuntu 24.04) |
 | **App-Pfad** | `/var/www/spielbetrieb/` |
-| **Service** | systemd → `spielbetrieb.service` (Port 8503) |
-| **Nginx** | `/etc/nginx/sites-enabled/spielbetrieb` |
-| **URL** | `https://spielbetrieb.westfalia-osterwick.de` (nach DNS-Eintrag) |
+| **Services** | `spielbetrieb.service` (Streamlit, Port 8505) · `spielbetrieb-callback.service` (Flask, Port 8504) |
+| **Nginx** | `/etc/nginx/sites-enabled/spielbetrieb` – öffentlicher Port **8503** |
+| **URL** | `http://89.167.0.28:8503` · `https://spielbetrieb.westfalia-osterwick.de` (nach DNS) |
+
+### Architektur
+
+```
+Browser → nginx :8503 (öffentlich)
+            ├─ /callback → Flask :8504  (OIDC-Exchange, Cookie setzen)
+            └─ /         → Streamlit :8505 (App, liest Cookie)
+```
 
 ---
 
 ## Update deployen (nach jedem `git push`)
 
 ```bash
-ssh root@89.167.0.28
-cd /var/www/spielbetrieb
-git pull origin main
-systemctl restart spielbetrieb
+ssh root@89.167.0.28 "cd /var/www/spielbetrieb && git fetch origin && git reset --hard origin/main && cp nginx.conf /etc/nginx/sites-available/spielbetrieb && systemctl restart spielbetrieb spielbetrieb-callback && nginx -t && systemctl reload nginx"
 ```
 
 ---
@@ -45,10 +50,11 @@ certbot --nginx -d spielbetrieb.westfalia-osterwick.de --non-interactive --agree
 
 ```bash
 # Service-Status
-systemctl status spielbetrieb
+systemctl status spielbetrieb spielbetrieb-callback
 
 # Logs live
 journalctl -u spielbetrieb -f
+journalctl -u spielbetrieb-callback -f
 
 # Nginx neu laden
 nginx -t && systemctl reload nginx
@@ -60,15 +66,6 @@ nginx -t && systemctl reload nginx
 
 - [ ] DNS-Eintrag `spielbetrieb.westfalia-osterwick.de` → `89.167.0.28` setzen
 - [ ] SSL via Certbot einrichten (Befehl s. o.)
-
-
-## Projekt-Info
-
-| | |
-|---|---|
-| **Stack** | Python + Streamlit |
-| **Datenbank** | SQLite (`fctm.db`, lokal im Projektordner) |
-| **Starten (lokal)** | `streamlit run app.py` |
 
 ---
 
@@ -82,56 +79,3 @@ streamlit run app.py
 ```
 
 Aufruf im Browser: `http://localhost:8501`
-
----
-
-## Status: Noch nicht auf Hetzner deployed
-
-Die App läuft bisher nur lokal. Für ein Deployment auf dem Hetzner-Server
-(`89.167.0.28`) wären folgende Schritte nötig:
-
-### Option A: Streamlit direkt (ohne Docker)
-
-```bash
-# Auf dem Server
-cd /var/www/spielbetrieb
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Als Daemon starten (Port 8501 oder nächster freier Port)
-nohup streamlit run app.py --server.port 8503 --server.headless true &
-```
-
-Nginx-Config ergänzen:
-```nginx
-server {
-    listen 80;
-    server_name spielbetrieb.westfalia-osterwick.de;
-
-    location / {
-        proxy_pass http://127.0.0.1:8503;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-```
-
-> **Hinweis Streamlit:** Streamlit benötigt WebSocket-Support im Nginx-Proxy
-> (`Upgrade` + `Connection` Header). Ohne diese Header funktioniert die App nicht.
-
-### Option B: Docker
-
-Ein `Dockerfile` wäre die sauberere Lösung für Streamlit auf dem Server,
-da Abhängigkeiten sauber isoliert sind.
-
----
-
-## Offene Punkte vor dem Go-Live
-
-- [ ] `fctm.db` persistieren (nicht im Repo – Pfad in `.env` auslagern)
-- [ ] Secrets (Admin-PIN, SMTP-Credentials) aus dem Code in `.env` auslagern
-- [ ] DNS-Eintrag `spielbetrieb.westfalia-osterwick.de` → `89.167.0.28`
-- [ ] SSL via Certbot einrichten
