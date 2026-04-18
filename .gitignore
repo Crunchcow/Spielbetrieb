@@ -1,4 +1,5 @@
 fctm.db
+spielbetrieb.db
 .venv/
 __pycache__/
 *.pyc
